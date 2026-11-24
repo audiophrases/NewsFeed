@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#121214">
+  <title>NewsFeed</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3,6h18v2H3zM3,11h18v2H3zM3,16h18v2H3z"/></symbol>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M20,11H7.83l5.59,-5.59L12,4l-8,8 8,8 1.41,-1.41L7.83,13H20v-2z"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M19,6.41L17.59,5 12,10.59 6.41,5 5,6.41 10.59,12 5,17.59 6.41,19 12,13.41 17.59,19 19,17.59 13.41,12z"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M17.65,6.35A7.96,7.96 0 0 0 12,4a8,8 0 1 0 7.73,10h-2.08A6,6 0 1 1 12,6c1.66,0 3.14,.69 4.22,1.78L13,11h7V4z"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><path d="M15.5,14h-.79l-.28,-.27A6.47,6.47 0 0 0 16,9.5 6.5,6.5 0 1 0 9.5,16c1.61,0 3.09,-.59 4.23,-1.57l.27,.28v.79l5,4.99L20.49,19zM9.5,14C7.01,14 5,11.99 5,9.5S7.01,5 9.5,5 14,7.01 14,9.5 11.99,14 9.5,14z"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="M12,17.27L18.18,21l-1.64,-7.03L22,9.24l-7.19,-.61L12,2 9.19,8.63 2,9.24l5.46,4.73L5.82,21z"/></symbol>
+    <symbol id="i-star-o" viewBox="0 0 24 24"><path d="M22,9.24l-7.19,-.62L12,2 9.19,8.63 2,9.24l5.46,4.73L5.82,21 12,17.27 18.18,21l-1.63,-7.03L22,9.24zM12,15.4l-3.76,2.27 1,-4.28 -3.32,-2.88 4.38,-.38L12,6.1l1.71,4.04 4.38,.38 -3.32,2.88 1,4.28L12,15.4z"/></symbol>
+    <symbol id="i-open" viewBox="0 0 24 24"><path d="M19,19H5V5h7V3H5a2,2 0 0 0 -2,2v14a2,2 0 0 0 2,2h14c1.1,0 2,-.9 2,-2v-7h-2v7zM14,3v2h3.59l-9.83,9.83 1.41,1.41L19,6.41V10h2V3h-7z"/></symbol>
+    <symbol id="i-dot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M9,16.17L4.83,12l-1.42,1.41L9,19 21,7l-1.41,-1.41z"/></symbol>
+    <symbol id="i-add" viewBox="0 0 24 24"><path d="M19,13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></symbol>
+    <symbol id="i-text" viewBox="0 0 24 24"><path d="M14,17H4v2h10v-2zM20,9H4v2h16V9zM4,15h16v-2H4v2zM4,5v2h16V5H4z"/></symbol>
+  </svg>
+
+  <header class="topbar">
+    <button id="menu" class="icon narrow-only" aria-label="Sources and topics"><svg><use href="#i-menu"/></svg></button>
+    <a class="brand" href="#" id="home"><img src="/icon.svg" alt=""><span>NewsFeed</span></a>
+    <label class="searchbox">
+      <svg><use href="#i-search"/></svg>
+      <input id="q" type="search" placeholder="Search your news" autocomplete="off" aria-label="Search your news">
+    </label>
+    <button id="refresh" class="icon" aria-label="Refresh (r)" title="Refresh (r)"><svg><use href="#i-refresh"/></svg></button>
+  </header>
+
+  <div class="layout">
+    <nav id="sidebar" class="sidebar" aria-label="Views">
+      <ul id="views" class="nav"></ul>
+      <div class="nav-head"><span>Topics</span>
+        <button id="add-topic" class="icon small" aria-label="Follow a topic" title="Follow a topic"><svg><use href="#i-add"/></svg></button></div>
+      <ul id="topics" class="nav"></ul>
+      <div class="nav-head"><span>Sources</span>
+        <button id="add-source" class="icon small" aria-label="Add sources" title="Add sources"><svg><use href="#i-add"/></svg></button></div>
+      <ul id="sources" class="nav"></ul>
+      <div class="sidebar-foot">
+        <button id="export" class="text-button">Export</button>
+        <button id="import" class="text-button">Import</button>
+        <input id="import-file" type="file" accept=".json,.opml,.xml,application/json,text/xml" hidden>
+      </div>
+    </nav>
+    <div id="scrim" class="scrim" hidden></div>
+
+    <main id="list-pane" class="list-pane">
+      <div class="toolbar">
+        <div class="heading">
+          <h1 id="view-title">All articles</h1>
+          <span id="view-count" class="count"></span>
+        </div>
+        <div class="filters">
+          <select id="sort" aria-label="Order">
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="source">By source</option>
+            <option value="relevance">Best match</option>
+          </select>
+          <select id="since" aria-label="Published">
+            <option value="0">Any time</option>
+            <option value="1">Last hour</option>
+            <option value="6">Last 6 hours</option>
+            <option value="24">Today</option>
+            <option value="72">Last 3 days</option>
+            <option value="168">This week</option>
+          </select>
+          <button id="unread-only" class="chip" role="switch" aria-checked="false">Unread</button>
+          <button id="mark-all" class="text-button" title="Mark everything listed as read">Mark all read</button>
+        </div>
+        <div id="lang-filter" class="chips" aria-label="Languages"></div>
+      </div>
+      <p id="progress" class="progress" hidden></p>
+      <div id="web-search" class="web-search" hidden></div>
+      <ul id="articles" class="articles"></ul>
+      <button id="more" class="primary subtle" hidden>Show more</button>
+      <div id="empty" class="empty" hidden></div>
+    </main>
+
+    <article id="reader" class="reader" aria-live="polite">
+      <div class="reader-bar">
+        <button id="close-reader" class="icon narrow-only" aria-label="Back to the list"><svg><use href="#i-back"/></svg></button>
+        <span class="spacer"></span>
+        <button id="full-text" class="icon" aria-label="Full text" title="Load the full article (f)"><svg><use href="#i-text"/></svg></button>
+        <button id="toggle-read" class="icon" aria-label="Mark unread" title="Mark read / unread (m)"><svg><use href="#i-dot"/></svg></button>
+        <button id="toggle-save" class="icon" aria-label="Save" title="Save for later (s)"><svg><use id="save-icon" href="#i-star-o"/></svg></button>
+        <a id="open-original" class="icon" target="_blank" rel="noopener noreferrer" aria-label="Open original" title="Open original (o)"><svg><use href="#i-open"/></svg></a>
+      </div>
+      <div id="reader-body" class="reader-body">
+        <div class="placeholder">
+          <img src="/icon.svg" alt="">
+          <p>Pick an article to read it here.</p>
+          <p class="keys"><kbd>j</kbd> <kbd>k</kbd> next / previous · <kbd>s</kbd> save · <kbd>m</kbd> read / unread ·
+            <kbd>o</kbd> original · <kbd>f</kbd> full text · <kbd>/</kbd> search · <kbd>r</kbd> refresh</p>
+        </div>
+      </div>
+    </article>
+  </div>
+
+  <dialog id="add-dialog">
+    <form method="dialog" class="dialog">
+      <h3 id="add-title">Add sources</h3>
+      <div id="add-body" class="dialog-body"></div>
+      <div class="dialog-actions">
+        <button id="add-back" type="button" class="text-button" hidden>Back</button>
+        <span class="spacer"></span>
+        <button value="cancel" class="text-button">Close</button>
+        <button id="add-confirm" value="ok" class="text-button" hidden>Add</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "name": "newsfeed",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Read news from the sources and topics you follow: search, filter, sort and read.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=18" }
+}

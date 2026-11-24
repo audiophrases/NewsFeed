@@ -1,0 +1,75 @@
+{
+  "groups": [
+    { "id": "world", "name": "World" },
+    { "id": "tech", "name": "Technology" },
+    { "id": "science", "name": "Science" },
+    { "id": "business", "name": "Business" },
+    { "id": "sport", "name": "Sport" },
+    { "id": "de", "name": "Deutsch" },
+    { "id": "fr", "name": "Français" },
+    { "id": "es", "name": "Español" },
+    { "id": "ca", "name": "Català" },
+    { "id": "it", "name": "Italiano" },
+    { "id": "pt", "name": "Português" }
+  ],
+  "sources": [
+    { "group": "world", "lang": "en", "country": "gb", "name": "BBC News – Top stories", "url": "https://feeds.bbci.co.uk/news/rss.xml" },
+    { "group": "world", "lang": "en", "country": "gb", "name": "BBC News – World", "url": "https://feeds.bbci.co.uk/news/world/rss.xml" },
+    { "group": "world", "lang": "en", "country": "gb", "name": "The Guardian – World", "url": "https://www.theguardian.com/world/rss" },
+    { "group": "world", "lang": "en", "country": "us", "name": "NPR News", "url": "https://feeds.npr.org/1001/rss.xml" },
+    { "group": "world", "lang": "en", "country": "us", "name": "The New York Times – Home", "url": "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml" },
+    { "group": "world", "lang": "en", "country": "qa", "name": "Al Jazeera English", "url": "https://www.aljazeera.com/xml/rss/all.xml" },
+    { "group": "world", "lang": "en", "country": "de", "name": "DW – English", "url": "https://rss.dw.com/rdf/rss-en-all" },
+    { "group": "world", "lang": "en", "country": "fr", "name": "France 24 – English", "url": "https://www.france24.com/en/rss" },
+    { "group": "world", "lang": "en", "country": "ca", "name": "CBC News – Top stories", "url": "https://www.cbc.ca/webfeed/rss/rss-topstories" },
+    { "group": "world", "lang": "en", "country": "ie", "name": "RTÉ News", "url": "https://www.rte.ie/feeds/rss/?index=/news/" },
+    { "group": "world", "lang": "en", "country": "au", "name": "ABC News Australia", "url": "https://www.abc.net.au/news/feed/51120/rss.xml" },
+    { "group": "world", "lang": "en", "country": "nz", "name": "RNZ – National", "url": "https://www.rnz.co.nz/rss/national.xml" },
+    { "group": "world", "lang": "en", "country": "in", "name": "The Hindu – National", "url": "https://www.thehindu.com/news/national/feeder/default.rss" },
+
+    { "group": "tech", "lang": "en", "country": "us", "name": "Ars Technica", "url": "https://feeds.arstechnica.com/arstechnica/index" },
+    { "group": "tech", "lang": "en", "country": "us", "name": "The Verge", "url": "https://www.theverge.com/rss/index.xml" },
+    { "group": "tech", "lang": "en", "country": "us", "name": "TechCrunch", "url": "https://techcrunch.com/feed/" },
+    { "group": "tech", "lang": "en", "country": "us", "name": "Wired", "url": "https://www.wired.com/feed/rss" },
+    { "group": "tech", "lang": "en", "country": "us", "name": "Hacker News – Front page", "url": "https://hnrss.org/frontpage" },
+    { "group": "tech", "lang": "en", "country": "gb", "name": "BBC News – Technology", "url": "https://feeds.bbci.co.uk/news/technology/rss.xml" },
+
+    { "group": "science", "lang": "en", "country": "us", "name": "ScienceDaily", "url": "https://www.sciencedaily.com/rss/all.xml" },
+    { "group": "science", "lang": "en", "country": "gb", "name": "Nature", "url": "https://www.nature.com/nature.rss" },
+    { "group": "science", "lang": "en", "country": "us", "name": "NASA – News releases", "url": "https://www.nasa.gov/news-release/feed/" },
+    { "group": "science", "lang": "en", "country": "gb", "name": "BBC News – Science & environment", "url": "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml" },
+
+    { "group": "business", "lang": "en", "country": "gb", "name": "BBC News – Business", "url": "https://feeds.bbci.co.uk/news/business/rss.xml" },
+    { "group": "business", "lang": "en", "country": "gb", "name": "The Guardian – Business", "url": "https://www.theguardian.com/uk/business/rss" },
+    { "group": "business", "lang": "en", "country": "us", "name": "CNBC – Top news", "url": "https://www.cnbc.com/id/100003114/device/rss/rss.html" },
+
+    { "group": "sport", "lang": "en", "country": "gb", "name": "BBC Sport", "url": "https://feeds.bbci.co.uk/sport/rss.xml" },
+    { "group": "sport", "lang": "en", "country": "us", "name": "ESPN – Top headlines", "url": "https://www.espn.com/espn/rss/news" },
+
+    { "group": "de", "lang": "de", "country": "de", "name": "tagesschau.de", "url": "https://www.tagesschau.de/xml/rss2/" },
+    { "group": "de", "lang": "de", "country": "de", "name": "DER SPIEGEL – Schlagzeilen", "url": "https://www.spiegel.de/schlagzeilen/index.rss" },
+    { "group": "de", "lang": "de", "country": "de", "name": "DW – Deutsch", "url": "https://rss.dw.com/xml/rss-de-all" },
+    { "group": "de", "lang": "de", "country": "at", "name": "ORF.at", "url": "https://rss.orf.at/news.xml" },
+    { "group": "de", "lang": "de", "country": "ch", "name": "SRF News", "url": "https://www.srf.ch/news/bnf/rss/1646" },
+
+    { "group": "fr", "lang": "fr", "country": "fr", "name": "Le Monde – À la une", "url": "https://www.lemonde.fr/rss/une.xml" },
+    { "group": "fr", "lang": "fr", "country": "fr", "name": "France 24", "url": "https://www.france24.com/fr/rss" },
+    { "group": "fr", "lang": "fr", "country": "fr", "name": "RFI", "url": "https://www.rfi.fr/fr/rss" },
+    { "group": "fr", "lang": "fr", "country": "fr", "name": "franceinfo", "url": "https://www.francetvinfo.fr/titres.rss" },
+
+    { "group": "es", "lang": "es", "country": "es", "name": "El País – Portada", "url": "https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada" },
+    { "group": "es", "lang": "es", "country": "es", "name": "RTVE Noticias", "url": "https://api2.rtve.es/rss/temas_noticias.xml" },
+    { "group": "es", "lang": "es", "country": "gb", "name": "BBC Mundo", "url": "https://feeds.bbci.co.uk/mundo/rss.xml" },
+
+    { "group": "ca", "lang": "ca", "country": "es-ct", "name": "VilaWeb", "url": "https://www.vilaweb.cat/feed/" },
+    { "group": "ca", "lang": "ca", "country": "es-ct", "name": "Ara.cat", "url": "https://www.ara.cat/rss/" },
+
+    { "group": "it", "lang": "it", "country": "it", "name": "ANSA – Ultima ora", "url": "https://www.ansa.it/sito/ansait_rss.xml" },
+    { "group": "it", "lang": "it", "country": "it", "name": "Corriere della Sera", "url": "https://xml2.corriereobjects.it/rss/homepage.xml" },
+    { "group": "it", "lang": "it", "country": "it", "name": "la Repubblica", "url": "https://www.repubblica.it/rss/homepage/rss2.0.xml" },
+
+    { "group": "pt", "lang": "pt", "country": "pt", "name": "Público", "url": "https://feeds.feedburner.com/PublicoRSS" },
+    { "group": "pt", "lang": "pt", "country": "pt", "name": "Observador", "url": "https://observador.pt/feed/" },
+    { "group": "pt", "lang": "pt", "country": "pt", "name": "RTP Notícias", "url": "https://www.rtp.pt/noticias/rss" }
+  ]
+}

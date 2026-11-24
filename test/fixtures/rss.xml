@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:atom="http://www.w3.org/2005/Atom">
+<channel>
+  <title>Example News &amp; Views</title>
+  <link>https://news.example.com/</link>
+  <atom:link href="https://news.example.com/rss.xml" rel="self" type="application/rss+xml"/>
+  <language>en-gb</language>
+  <item>
+    <title><![CDATA[Climate talks reach a deal in Bonn]]></title>
+    <link>https://news.example.com/climate-deal?utm_source=rss</link>
+    <guid isPermaLink="false">a1</guid>
+    <description><![CDATA[<p>Negotiators agreed on <b>new targets</b> late on Friday.</p><img src="https://img.example.com/a.jpg">]]></description>
+    <dc:creator>Jane Doe</dc:creator>
+    <category>Environment</category><category>World</category>
+    <pubDate>Mon, 23 Nov 2026 10:00:00 GMT</pubDate>
+  </item>
+  <item>
+    <title>Football: late goal settles derby</title>
+    <link>https://news.example.com/derby</link>
+    <description>A dramatic finish &#8211; again.</description>
+    <media:thumbnail url="https://img.example.com/derby.jpg" width="240"/>
+    <pubDate>Tue, 24 Nov 2026 08:30:00 +0100</pubDate>
+  </item>
+</channel>
+</rss>
