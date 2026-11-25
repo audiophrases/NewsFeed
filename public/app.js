@@ -20,6 +20,7 @@ const EDITIONS = [
   ['de-DE', 'Deutsch · Deutschland'], ['de-AT', 'Deutsch · Österreich'], ['de-CH', 'Deutsch · Schweiz'],
   ['fr-FR', 'Français · France'], ['fr-CA', 'Français · Canada'], ['fr-CH', 'Français · Suisse'],
   ['es-ES', 'Español · España'], ['es-MX', 'Español · México'], ['es-US', 'Español · Estados Unidos'],
+  ['ca-ES', 'Català · Espanya'],
   ['it-IT', 'Italiano · Italia'], ['pt-PT', 'Português · Portugal'], ['pt-BR', 'Português · Brasil'],
   ['nl-NL', 'Nederlands · Nederland'], ['nl-BE', 'Nederlands · België'],
 ];
