@@ -30,8 +30,8 @@ const FEED_CACHE_MS = 5 * 60 * 1000;
 const ARTICLE_CACHE_MS = 60 * 60 * 1000;
 const ICON_CACHE_MS = 24 * 60 * 60 * 1000;
 const CACHE_LIMIT = 500;
-/** Editions one topic may search at once (each is one more Google News request). */
-const MAX_EDITIONS = 5;
+/** A bound on one search's editions against misuse, not a choice: there are fewer languages. */
+const MAX_EDITIONS = 25;
 /** News searches running at once, across everyone using this server. */
 const SEARCH_SLOTS = 3;
 // Where news and feed searches go; the tests point these at a local site.
@@ -124,23 +124,21 @@ const newsSearch = (q, lang, country) =>
   cached(`search|${lang}|${country}|${q}`, FEED_CACHE_MS, () => searchNews(q, lang, country));
 
 /**
- * A topic searched in one or more editions, one after another, merged; every article keeps its
- * edition's language. Editions that fail are listed; it fails only if all of them do.
+ * A topic searched in one or more editions, merged in the order asked; every article keeps its
+ * edition's language. They are asked for together and the search slots pace them, so many
+ * languages don't take one search time each. Editions that fail are listed; it fails only if
+ * all of them do.
  */
 async function searchEditions(q, editions) {
-  const items = [], failed = [];
-  let lastError;
-  for (const [lang, country] of editions) {
-    try {
-      const feed = await newsSearch(q, lang, country);
-      for (const item of feed.items) items.push({ ...item, lang });
-    } catch (e) {
-      lastError = e;
-      failed.push({ edition: `${lang}-${country}`, error: reason(e) });
-    }
-  }
-  if (failed.length === editions.length) throw lastError;
-  return { title: q, language: editions[0][0], items, failed };
+  const results = await Promise.all(editions.map(([lang, country]) => newsSearch(q, lang, country)
+      .then(feed => ({ items: feed.items.map(item => ({ ...item, lang })) }),
+          error => ({ error, edition: `${lang}-${country}` }))));
+  const failed = results.filter(r => r.error);
+  if (failed.length === editions.length) throw failed[failed.length - 1].error;
+  return {
+    title: q, language: editions[0][0], items: results.flatMap(r => r.items || []),
+    failed: failed.map(r => ({ edition: r.edition, error: reason(r.error) })),
+  };
 }
 
 /** The editions asked for: editions=ca-ES,en-US, or the older lang=ca&country=ES. */

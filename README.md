@@ -51,7 +51,7 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   server finds and caches the icons, so no icon service learns which sites you follow.
 - **Topics** – follow anything ("climate", `"champions league"`, `AI -crypto`) and get headlines
   about it from every outlet, via Google News (Bing News as a fallback), in the edition you pick,
-  and **also in up to four other languages**. Names work as they are in every language; for other
+  and **also in as many other languages as you like**. Names work as they are in every language; for other
   words add the translations with OR: `housing OR vivienda OR habitatge`. A topic's view also
   includes matching articles from your own sources. Its articles open in the reader like any
   other: Google News links don't name the article's address, so when you open one the server asks
@@ -73,8 +73,8 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   alternatives; matches are highlighted.
   **Enter** (or "Search all news too") searches all news as well: your news's matches and a news
   search of every outlet, as a topic's, in one list with each story once. It says how many are in
-  your news and how many more it found, searches in your language and any others you pick there
-  (remembered for the next search), updates with the rest, and is kept only if you **Follow as a
+  your news and how many more it found, searches in the languages you pick there (as many as you
+  like; at first your browser's, then whichever you used last, which new topics start from too), updates with the rest, and is kept only if you **Follow as a
   topic**.
 - **Filter** – by source or topic, unread only, saved, time (last hour … this week) and language.
 - **Order** – newest first, oldest first, by source, or best match while searching.

@@ -42,8 +42,8 @@ const byKey = new Map();
 let readKeys = new Set();
 /** Saved articles by key, kept whole so they outlive the feeds. */
 let saved = new Map();
-/** searchAlso: the languages searches use besides the browser's (as a topic's other languages). */
-let prefs = { view: 'all', sort: 'newest', since: 0, unreadOnly: false, langs: [], fullText: true, searchAlso: [] };
+/** searchLangs: the languages searches use, as last picked (the first is the main one); null until picked. */
+let prefs = { view: 'all', sort: 'newest', since: 0, unreadOnly: false, langs: [], fullText: true, searchLangs: null };
 let shown = PAGE;
 let visible = [];
 let selectedKey = null;
@@ -83,8 +83,8 @@ const savePrefs = () => store(KEY_PREFS, prefs);
 
 // ---- sources -----------------------------------------------------------------------------
 
-/** Most editions one topic searches; each is one more news search on every refresh. */
-const MAX_EDITIONS = 5;
+/** A bound on a topic's editions against bad data, not a choice: there are fewer languages. */
+const MAX_EDITIONS = 25;
 
 /** A topic's editions, its main one first. (Topics from before there were several have one.) */
 const topicEditions = s => (Array.isArray(s.editions) && s.editions.length ? s.editions : [`${s.lang}-${s.country}`]);
@@ -603,25 +603,20 @@ function searchBar(bar, base) {
     keep.title = 'Keep this search in Topics, updated with the rest of your news';
     bar.append(keep);
   }
-  const editions = topicEditions(webSearch);
-  const main = editions[0].split('-')[0];
-  const also = new Set(editions.slice(1).map(e => e.split('-')[0]));
+  const chosen = topicEditions(webSearch).map(e => e.split('-')[0]);
   const langs = el('div', 'also');
-  langs.append(el('span', '', `Besides ${languageName(main)}, also search in:`),
-      ...EDITION_LANGS.filter(([lang]) => lang !== main).map(([lang, name]) => {
-        const b = el('button', 'chip small', name);
-        b.type = 'button';
-        b.setAttribute('aria-pressed', String(also.has(lang)));
-        b.addEventListener('click', () => {
-          if (also.has(lang)) also.delete(lang);
-          else if (also.size + 1 >= MAX_EDITIONS) return toast(`Up to ${MAX_EDITIONS} languages per search`);
-          else also.add(lang);
-          prefs.searchAlso = [...also];
-          savePrefs();
-          runWebSearch(webSearch.q);
-        });
-        return b;
-      }));
+  langs.append(el('span', '', 'Search in:'), ...EDITION_LANGS.map(([lang, name]) => {
+    const b = el('button', 'chip small', name);
+    b.type = 'button';
+    b.setAttribute('aria-pressed', String(chosen.includes(lang)));
+    b.addEventListener('click', () => {
+      if (!chosen.includes(lang)) rememberSearchLangs([...chosen, lang]);
+      else if (chosen.length === 1) return toast('Search in at least one language');
+      else rememberSearchLangs(chosen.filter(l => l !== lang));
+      runWebSearch(webSearch.q);
+    });
+    return b;
+  }));
   bar.append(langs);
 }
 
@@ -767,11 +762,23 @@ async function runWebSearch(q) {
   render();
 }
 
-/** A search's editions: the browser's own, then the other languages last picked for searches. */
+/**
+ * The languages searches and new topics use: the ones last picked, in that order; at first the
+ * browser's own. Each in the browser's country where it has an edition there.
+ */
 function searchEditions() {
-  const main = defaultEdition();
-  const country = main.split('-')[1];
-  return cleanEditions([main, ...prefs.searchAlso.map(lang => editionFor(lang, country))]);
+  const own = defaultEdition();
+  const [ownLang, country] = own.split('-');
+  const known = new Set(EDITION_LANGS.map(([lang]) => lang));
+  const langs = (Array.isArray(prefs.searchLangs) ? prefs.searchLangs : []).filter(lang => known.has(lang));
+  const editions = (langs.length ? langs : [ownLang]).map(lang => (lang === ownLang ? own : editionFor(lang, country)));
+  return cleanEditions(editions);
+}
+
+/** Remembers the languages of the latest search, for the next ones. */
+function rememberSearchLangs(langs) {
+  prefs.searchLangs = [...new Set(langs)];
+  savePrefs();
 }
 
 // ---- reader ------------------------------------------------------------------------------
@@ -1206,7 +1213,7 @@ function showTopicForm(q = '') {
   addMode = 'topic';
   setStep('Follow a topic', 'Follow', true);
   const form = el('div', 'form');
-  const { fields, preview, input } = topicFields(typeof q === 'string' ? q : '', [defaultEdition()]);
+  const { fields, preview, input } = topicFields(typeof q === 'string' ? q : '', searchEditions());
   form.append(...fields);
   $('add-body').replaceChildren(form, preview);
   renderTopicLanguages();
@@ -1251,7 +1258,6 @@ function renderTopicLanguages() {
     b.setAttribute('aria-pressed', String(on));
     b.addEventListener('click', () => {
       if (on) topicAlso.delete(lang);
-      else if (topicAlso.size + 1 >= MAX_EDITIONS) return toast(`Up to ${MAX_EDITIONS} languages per topic`);
       else topicAlso.add(lang);
       renderTopicLanguages();
       clearTopicPreview();
@@ -1274,7 +1280,10 @@ function topicFromForm() {
   const main = $('topic-edition').value;
   const country = main.split('-')[1];
   const editions = [main, ...[...topicAlso].map(lang => editionFor(lang, country)).filter(Boolean)];
-  return topicEntry({ q, editions });
+  const topic = topicEntry({ q, editions });
+  // A new topic's languages are the latest searched (editing a topic you follow doesn't count).
+  if (addMode === 'topic') rememberSearchLangs(topic.editions.map(e => e.split('-')[0]));
+  return topic;
 }
 
 async function previewTopic() {
@@ -2514,7 +2523,10 @@ async function start() {
   saved = new Map(load(KEY_SAVED, []).filter(a => a && a.key).map(a => [a.key, a]));
   prefs = { ...prefs, ...load(KEY_PREFS, {}) };
   if (!Array.isArray(prefs.langs)) prefs.langs = [];
-  if (!Array.isArray(prefs.searchAlso)) prefs.searchAlso = [];
+  if (!Array.isArray(prefs.searchLangs) && Array.isArray(prefs.searchAlso)) {
+    prefs.searchLangs = [defaultEdition().split('-')[0], ...prefs.searchAlso];
+  }
+  delete prefs.searchAlso;
   if (prefs.view === 'web') prefs.view = 'all';
   prefs.view = upgradeView(prefs.view, replaced);
 

@@ -232,6 +232,15 @@ test('a topic in several editions: one search each, every article tagged with it
   assert.deepEqual(older.body.items.map(i => i.lang), ['ca', 'ca'], 'lang and country still work');
 });
 
+test('a search in more than five languages: every one searched, in the order asked', async () => {
+  const editions = ['ca-ES', 'en-US', 'es-ES', 'de-DE', 'fr-FR', 'it-IT', 'pt-PT', 'nl-NL'];
+  const { status, body } = await api('/api/search', { q: 'climate', editions: editions.join(',') });
+  assert.equal(status, 200);
+  assert.deepEqual([...new Set(body.items.map(i => i.lang))], editions.map(e => e.split('-')[0]));
+  assert.equal(body.items.length, editions.length * 2);
+  assert.deepEqual(body.failed, []);
+});
+
 test('search for a source by name: the outlet’s own feeds and the listed ones, checked', async () => {
   const { status, body } = await api('/api/sources', { q: 'example news', lang: 'en', country: 'US' });
   assert.equal(status, 200);
