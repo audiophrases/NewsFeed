@@ -136,6 +136,7 @@ async function handle(req, res) {
   const u = new URL(req.url, 'http://localhost');
   if (req.method !== 'GET') return send(res, 405, 'Method not allowed', 'text/plain');
 
+  if (u.pathname === '/health') return send(res, 200, 'ok', 'text/plain');
   if (u.pathname === '/api/directory') return json(res, 200, DIRECTORY);
 
   if (u.pathname === '/api/feed') {

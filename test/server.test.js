@@ -117,3 +117,9 @@ test('static files stay inside public/', async () => {
   assert.equal((await fetch(appUrl + '/flags/es-ct.png')).headers.get('content-type'), 'image/png');
   assert.equal((await fetch(appUrl + '/..%2Fserver.js')).status, 404);
 });
+
+test('health check for the host', async () => {
+  const res = await fetch(appUrl + '/health');
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), 'ok');
+});

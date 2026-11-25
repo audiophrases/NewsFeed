@@ -1,0 +1,14 @@
+# Render Blueprint: hosts NewsFeed as a free Node web service (same pattern as PinPlay's
+# Edge TTS bridge). One click: https://render.com/deploy?repo=https://github.com/audiophrases/NewsFeed
+# The server has no dependencies; it reads Render's PORT and listens on all interfaces.
+services:
+  - type: web
+    name: newsfeed
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "24"

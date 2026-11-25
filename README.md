@@ -19,6 +19,22 @@ node server.js        # or double-click start.cmd on Windows
 Open the address it prints (default `http://localhost:8091`). Phones on the same Wi-Fi can
 use the "on your Wi-Fi" address. `PORT=…` changes the port, `HOST=127.0.0.1` keeps it to this PC.
 
+## Put it online (Render)
+
+To use it from anywhere, host it on a free [Render](https://render.com) account. Click the
+button, sign in to Render and **Apply** the Blueprint: Render reads `render.yaml` and sets
+everything up.
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/audiophrases/NewsFeed)
+
+When it shows **Live**, open the `https://newsfeed-….onrender.com` address it gives you.
+Every push to `main` redeploys it. A free service sleeps after 15 minutes without visits, so
+the first visit after that takes up to a minute.
+
+By hand instead: **New ➜ Web Service**, connect `https://github.com/audiophrases/NewsFeed`,
+Language **Node**, Build Command `npm install`, Start Command `node server.js`, Instance Type
+**Free**.
+
 ## What it does
 
 - **Sources** – about 50 built-in news feeds (world, technology, science, business, sport, and
