@@ -56,7 +56,14 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
 - **Filter** – by source or topic, unread only, saved, time (last hour … this week) and language.
 - **Order** – newest first, oldest first, by source, or best match while searching.
 - **Read** – a reader pane with the feed's text, and the full article fetched and cleaned up
-  (text only, no ads or scripts) when the site allows it; one click to the original.
+  (text only, no ads, scripts, cookie notices or "follow us" lines) when the site allows it; one
+  click to the original. A line under the headline says how much of the article you have:
+  **✓ Full article** when it is as long as the page says the article is, **⚠ Only part of the
+  article** when it is clearly shorter (or is the opening of a subscriber article), **Text from the
+  page** when the site doesn't say how long it is, or **Summary only** with the reason (subscribers
+  only, the site refuses NewsFeed, found through Google News…). Articles a site marks for
+  subscribers carry a **Subscriber article** tag. The length and subscriber flag come from the
+  page's own JSON-LD description (`wordCount`, `articleBody`, `isAccessibleForFree`).
 - **Keep track** – read/unread, saved articles (kept even after they leave the feed), duplicate
   stories shown once, unread counts per source, refresh every 15 minutes.
 - **Keyboard** – `j`/`k` next/previous, `s` save, `m` read/unread, `o` open original,

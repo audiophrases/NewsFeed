@@ -636,7 +636,9 @@ function renderReader(a) {
     time.title = age(a.publishedAt);
     meta.append(time);
   }
-  const parts = [meta, el('h2', '', a.title)];
+  const status = el('p', 'r-status');
+  status.id = 'reader-status';
+  const parts = [meta, el('h2', '', a.title), status];
   if (a.image) parts.push(heroImage(a.image));
   const text = el('div', 'text');
   text.id = 'reader-text';
@@ -652,8 +654,46 @@ function renderReader(a) {
   parts.push(note);
   body.replaceChildren(...parts);
   if (fullTexts.has(a.key)) showFullText(a, fullTexts.get(a.key));
-  else if (prefs.fullText && a.link && canFetch(a.link)) loadFullText(a);
-  else readerActions(a, a.link && !canFetch(a.link) ? 'This outlet’s full text is not available here.' : '');
+  else if (refusals.has(a.key)) {
+    setStatus('summary', shownSoFar(a), refusals.get(a.key));
+    readerActions(a, '', undefined, false);
+  } else if (prefs.fullText && a.link && canFetch(a.link)) loadFullText(a);
+  else if (a.link && !canFetch(a.link)) {
+    setStatus('summary', shownSoFar(a), `found through Google News, whose links NewsFeed can’t follow to the article. `
+        + `Read it on ${a.sourceName}.`);
+    readerActions(a);
+  } else {
+    setStatus('summary', shownSoFar(a), 'From the feed.');
+    readerActions(a);
+  }
+}
+
+/** What the reader shows before (or instead of) the full text. */
+const shownSoFar = a => (a.summary ? 'Summary only' : 'Headline only');
+
+/**
+ * The line under the headline saying how much of the article this is. kind: "full" (all of it,
+ * checked), "partial" (part of it, checked), "unknown" (can't be checked), "summary", "loading".
+ */
+function setStatus(kind, label, detail, subscriber = false) {
+  const status = $('reader-status');
+  if (!status) return;
+  status.className = `r-status ${kind}`;
+  const mark = { full: '✓ ', partial: '⚠ ' }[kind] || '';
+  status.replaceChildren(el('strong', '', mark + label));
+  if (subscriber) status.append(' ', el('span', 'r-tag', 'Subscriber article'));
+  if (detail) status.append(' · ', detail);
+}
+
+/** A fetch error, said the way a reader would want to hear it. */
+function explainFailure(message, site) {
+  if (/HTTP 402/.test(message)) return `${site} only shows its articles to subscribers.`;
+  if (/HTTP 40[13]/.test(message)) return `${site} doesn’t let NewsFeed read its pages.`;
+  if (/HTTP 4(04|10)/.test(message)) return 'The article is no longer on the site.';
+  if (/HTTP 429/.test(message)) return `${site} is limiting requests just now; try again later.`;
+  if (/Timed out/.test(message)) return `${site} took too long to answer.`;
+  if (/Not a web page/.test(message)) return 'The link doesn’t lead to a web page.';
+  return `The article couldn’t be loaded (${message}).`;
 }
 
 function heroImage(src) {
@@ -668,20 +708,25 @@ function heroImage(src) {
 /** Google News links only lead to the article through a script page. */
 const canFetch = link => !/^https:\/\/news\.google\.com\//.test(link);
 
-function readerActions(a, message) {
+/** Articles whose site refused for good (subscribers only, blocked, gone), by key: the reason. */
+const refusals = new Map();
+
+function readerActions(a, message, openText, canRetry = true) {
   const note = $('reader-note');
   if (!note) return;
   note.replaceChildren();
   if (message) note.append(el('p', '', message));
   const actions = el('div', 'actions');
   if (a.link) {
-    const open = el('a', 'primary', 'Read on ' + (hostOf(a.link) || 'the site'));
+    // A Google News link's own address says news.google.com; name the outlet instead.
+    const where = canFetch(a.link) ? hostOf(a.link) || 'the site' : a.sourceName;
+    const open = el('a', 'primary', openText || 'Read on ' + where);
     open.href = a.link;
     open.target = '_blank';
     open.rel = 'noopener noreferrer';
     actions.append(open);
   }
-  if (a.link && canFetch(a.link) && !fullTexts.has(a.key)) {
+  if (canRetry && a.link && canFetch(a.link) && !fullTexts.has(a.key)) {
     actions.append(button('primary subtle', 'Load full text', () => loadFullText(a)));
   }
   note.append(actions);
@@ -692,25 +737,40 @@ const hostOf = link => { try { return new URL(link).hostname.replace(/^www\./, '
 async function loadFullText(a) {
   if (!a.link || !canFetch(a.link)) return;
   const note = $('reader-note');
-  if (note) note.replaceChildren(el('p', '', 'Loading the full article…'));
+  if (note) note.replaceChildren();
+  setStatus('loading', 'Loading the full article…');
   let result;
   try {
     result = await getJson(`/api/article?url=${encodeURIComponent(a.link)}`);
   } catch (e) {
-    if (selectedKey === a.key) readerActions(a, `Couldn’t load the full article (${e.message}).`);
+    if (selectedKey === a.key) {
+      const why = explainFailure(e.message, a.sourceName);
+      // Asking again won't change a subscribers-only, blocked or deleted page; a timeout might pass.
+      const final = /HTTP (40[1-4]|410)/.test(e.message);
+      if (final) refusals.set(a.key, why);
+      setStatus('summary', shownSoFar(a), why);
+      readerActions(a, '', undefined, !final);
+    }
     return;
   }
   fullTexts.set(a.key, result);
   if (selectedKey === a.key) showFullText(a, result);
 }
 
+const plural = (n, one, many) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
+
 function showFullText(a, result) {
   const text = $('reader-text');
+  const site = result.site || a.sourceName;
+  const { status, expected, subscriber } = result.completeness || { status: 'unknown' };
   // Only replace the feed's summary with something longer.
   const summaryLength = (a.summary || '').length;
   const fullLength = result.blocks.reduce((n, b) => n + b.text.length, 0);
   if (!text || fullLength < Math.max(300, summaryLength * 1.2)) {
-    readerActions(a, 'The site didn’t share more than this summary.');
+    setStatus('summary', shownSoFar(a), subscriber
+      ? `the page has no more of this subscriber article for NewsFeed`
+      : `${site} didn’t share more than this`, subscriber);
+    readerActions(a);
     return;
   }
   const out = [];
@@ -726,8 +786,20 @@ function showFullText(a, result) {
   }
   text.replaceChildren(...out);
   if (!a.image && result.image) text.before(heroImage(result.image));
-  const minutes = Math.max(1, Math.round(result.words / 230));
-  readerActions(a, `Full text from ${result.site} · ${minutes} min read`);
+  const minutes = `${Math.max(1, Math.round(result.words / 230))} min read`;
+  if (status === 'full') {
+    setStatus('full', 'Full article', `as long as ${site} says it is (${plural(expected, 'word', 'words')}) · ${minutes}`, subscriber);
+    readerActions(a);
+  } else if (status === 'partial') {
+    setStatus('partial', 'Only part of the article', expected
+      ? `${plural(result.words, 'word', 'words')} of the ${expected.toLocaleString()} ${site} says it has`
+      : `usually only the opening of a subscriber article can be read here (${plural(result.words, 'word', 'words')})`,
+    subscriber);
+    readerActions(a, 'The rest is on the site.', `Read the rest on ${hostOf(a.link) || site}`);
+  } else {
+    setStatus('unknown', 'Text from the page', `${minutes} · ${site} doesn’t say how long the article is, so it can’t be checked for completeness`);
+    readerActions(a);
+  }
 }
 
 function toggleRead() {

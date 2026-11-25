@@ -16,6 +16,9 @@
   --mark: rgba(138, 180, 248, .28);
   --unread: #8ab4f8;
   --star: #fdd663;
+  --ok: #81c995;
+  --warn: #fdd663;
+  --warn-bg: rgba(253, 214, 99, .12);
   color-scheme: dark;
 }
 
@@ -35,6 +38,9 @@
     --mark: rgba(26, 115, 232, .18);
     --unread: #1a73e8;
     --star: #e8a600;
+    --ok: #188038;
+    --warn: #8a5a00;
+    --warn-bg: rgba(232, 166, 0, .14);
     color-scheme: light;
   }
 }
@@ -427,6 +433,28 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .reader .r-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; color: var(--muted); font-size: 13px; }
 
 .reader h2 { margin: 10px auto 12px; font-size: clamp(22px, 2.6vw, 30px); line-height: 1.25; }
+
+/* How much of the article this is: full (checked), partial, can't be checked, summary only. */
+.reader .r-status { margin: 0 0 16px; color: var(--faint); font-size: 13px; line-height: 1.5; }
+
+.reader .r-status strong { color: var(--muted); font-weight: 600; }
+
+.reader .r-status.full strong { color: var(--ok); }
+
+.reader .r-status.partial { padding: 8px 12px; border-radius: 8px; background: var(--warn-bg); color: var(--muted); }
+
+.reader .r-status.partial strong { color: var(--warn); }
+
+.reader .r-tag {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--chip);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
 
 .reader .hero { display: block; width: 100%; max-height: 420px; object-fit: cover; border-radius: 12px; margin-bottom: 18px; background: var(--chip); }
 
