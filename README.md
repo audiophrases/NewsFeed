@@ -42,7 +42,10 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   by name** ("El Nacional", "Betevé") in *Add sources*: NewsFeed finds the outlets Google News
   knows by that name and the feeds Feedly lists for it, checks every feed works, and shows each
   with its newest headline. A site's or feed's address works too. For a site whose feed can't be
-  read, you can follow its headlines via Google News instead (a `site:` search). Section feeds
+  read, you can follow its headlines via Google News instead (a `site:` search, listed with your
+  sources). The same goes for a feed that stops letting NewsFeed read it (HTTP 401/403): its page
+  offers to switch it to its section's or site's headlines via Google News. The Guardian refuses
+  NewsFeed's server, so its built-in sources work this way. Section feeds
   are named after their site ("The Economist – Europe"). Sources show their country's flag, or the
   site's own icon when the country isn't known; topic articles show their outlet's icon. NewsFeed's
   server finds and caches the icons, so no icon service learns which sites you follow.

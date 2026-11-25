@@ -15,7 +15,7 @@
   "sources": [
     { "group": "world", "lang": "en", "country": "gb", "name": "BBC News – Top stories", "url": "https://feeds.bbci.co.uk/news/rss.xml" },
     { "group": "world", "lang": "en", "country": "gb", "name": "BBC News – World", "url": "https://feeds.bbci.co.uk/news/world/rss.xml" },
-    { "group": "world", "lang": "en", "country": "gb", "name": "The Guardian – World", "url": "https://www.theguardian.com/world/rss" },
+    { "group": "world", "kind": "news", "lang": "en", "country": "gb", "name": "The Guardian – World", "site": "theguardian.com/world", "edition": "en-GB", "replaces": "https://www.theguardian.com/world/rss" },
     { "group": "world", "lang": "en", "country": "us", "name": "NPR News", "url": "https://feeds.npr.org/1001/rss.xml" },
     { "group": "world", "lang": "en", "country": "us", "name": "The New York Times – Home", "url": "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml" },
     { "group": "world", "lang": "en", "country": "qa", "name": "Al Jazeera English", "url": "https://www.aljazeera.com/xml/rss/all.xml" },
@@ -40,7 +40,7 @@
     { "group": "science", "lang": "en", "country": "gb", "name": "BBC News – Science & environment", "url": "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml" },
 
     { "group": "business", "lang": "en", "country": "gb", "name": "BBC News – Business", "url": "https://feeds.bbci.co.uk/news/business/rss.xml" },
-    { "group": "business", "lang": "en", "country": "gb", "name": "The Guardian – Business", "url": "https://www.theguardian.com/uk/business/rss" },
+    { "group": "business", "kind": "news", "lang": "en", "country": "gb", "name": "The Guardian – Business", "site": "theguardian.com/business", "edition": "en-GB", "replaces": "https://www.theguardian.com/uk/business/rss" },
     { "group": "business", "lang": "en", "country": "us", "name": "CNBC – Top news", "url": "https://www.cnbc.com/id/100003114/device/rss/rss.html" },
 
     { "group": "sport", "lang": "en", "country": "gb", "name": "BBC Sport", "url": "https://feeds.bbci.co.uk/sport/rss.xml" },

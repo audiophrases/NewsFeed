@@ -85,15 +85,41 @@ const cleanEditions = list => [...new Set((Array.isArray(list) ? list : []).filt
     .slice(0, MAX_EDITIONS);
 
 // A one-edition topic keeps the id it had before topics could have more, with its read marks.
-const sid = s => (s.kind === 'topic' ? `topic|${topicEditions(s).join('+')}|${s.q.toLowerCase()}` : 'rss|' + s.url);
+const sid = s => (s.kind === 'topic' ? `topic|${topicEditions(s).join('+')}|${s.q.toLowerCase()}`
+  : s.kind === 'news' ? `news|${s.edition}|${s.site}` : 'rss|' + s.url);
 const sourceById = id => sources.find(s => sid(s) === id) || (webSearch && sid(webSearch) === id ? webSearch : null);
 
 function apiUrl(s) {
   if (s.kind === 'topic') {
     return `/api/search?q=${encodeURIComponent(s.q)}&editions=${topicEditions(s).join(',')}`;
   }
+  if (s.kind === 'news') return `/api/search?q=${encodeURIComponent('site:' + s.site)}&editions=${s.edition}`;
   return `/api/feed?url=${encodeURIComponent(s.url)}`;
 }
+
+/**
+ * A source as stored, from the directory, a search, an import or older storage; null if unusable.
+ * Three kinds: rss (a feed), topic (a news search), news (a site's or section's headlines via
+ * Google News, for sites that don't let NewsFeed read their feed; listed with the sources).
+ */
+function sourceEntry(s) {
+  if (!s) return null;
+  if (s.kind === 'topic') return s.q ? topicEntry(s) : null;
+  if (s.kind === 'news') {
+    const site = String(s.site || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '').toLowerCase();
+    if (!/^[\w-]+(\.[\w-]+)+(\/[\w\-./]*)?$/.test(site)) return null;
+    const edition = cleanEditions([s.edition])[0] || defaultEdition();
+    return { kind: 'news', site, edition, name: s.name || site, lang: s.lang || edition.split('-')[0], country: s.country || null };
+  }
+  if (!/^https?:\/\//i.test(s.url || '')) return null;
+  return { kind: 'rss', url: s.url, name: s.name || hostOf(s.url), lang: s.lang || null, country: s.country || null };
+}
+
+/** A page of the source's site, for its icon: a feed's site once loaded, else the feed's address. */
+const sourceLink = s => (s.kind === 'news' ? 'https://' + s.site : loaded.get(sid(s))?.siteUrl || s.url);
+
+/** What the add dialogs say under a source's name. */
+const sourceDetail = s => (s.kind === 'news' ? `${s.site} · headlines via Google News` : hostOf(s.url));
 
 /** A topic as it is stored: its main edition in lang and country, all of them in editions. */
 function topicEntry(s) {
@@ -215,6 +241,8 @@ function rebuild() {
     const got = loaded.get(id);
     if (!got) continue;
     for (const item of got.items) {
+      // Google News lists a site's topic pages too ("China", "Women's football"): not articles.
+      if (s.kind === 'news' && item.title.split(/\s+/).length < 3) continue;
       const link = item.link ? realLink(item.link) : null;
       const key = (link && linkKey(link)) || `${id}|${item.id}`;
       const tk = titleKey(item.title);
@@ -226,7 +254,7 @@ function rebuild() {
       const a = {
         key, sid: id, sids: [id], title: item.title, link, summary: item.summary, image: item.image,
         author: item.author, categories: item.categories || [], publishedAt: item.publishedAt || 0,
-        sourceName: item.publisher || s.name, country: item.publisher ? null : s.country,
+        sourceName: item.publisher || s.name, country: s.kind === 'news' || !item.publisher ? s.country : null,
         site: item.publisherUrl || got.siteUrl || s.url || null,
         lang: item.lang || s.lang || got.language || null,
       };
@@ -352,7 +380,7 @@ function sourceItem(s, kind) {
   const id = sid(s);
   const view = `${kind}:${id}`;
   const li = navItem(view, s.name, kind === 'topic' ? 'i-search' : 'i-text', '');
-  if (kind === 'source') li.firstChild.replaceWith(mark(s.country, loaded.get(sid(s))?.siteUrl || s.url));
+  if (kind === 'source') li.firstChild.replaceWith(mark(s.country, sourceLink(s)));
   const got = loaded.get(id);
   const badge = li.querySelector('.badge');
   if (got && got.error && !got.items.length) {
@@ -363,7 +391,8 @@ function sourceItem(s, kind) {
     const list = kind === 'topic' ? viewArticlesFor(view) : articles.filter(a => a.sids.includes(id));
     const n = list.filter(a => !readKeys.has(a.key)).length;
     badge.textContent = n ? String(n) : '';
-    li.title = kind === 'topic' ? `${s.q} · ${topicEditions(s).join(', ')}` : s.url;
+    li.title = kind === 'topic' ? `${s.q} · ${topicEditions(s).join(', ')}`
+      : s.kind === 'news' ? `Headlines via Google News · site:${s.site} · ${s.edition}` : s.url;
   }
   const remove = iconButton('i-close', `Stop following ${s.name}`, () => unfollow(s));
   remove.classList.add('remove');
@@ -544,8 +573,18 @@ function renderEmpty(base) {
   } else if (base.length) {
     empty.append(el('p', '', 'No articles match these filters.'), button('primary subtle', 'Clear filters', clearFilters));
   } else {
-    const got = kind === 'web' || kind === 'source' || kind === 'topic' ? loaded.get(splitView(prefs.view)[1] || sid(webSearch)) : null;
-    empty.append(el('p', '', got && got.error ? `Could not load: ${got.error}` : kind === 'unread' ? 'All caught up.' : 'No articles yet.'));
+    const id = splitView(prefs.view)[1];
+    const got = kind === 'web' || kind === 'source' || kind === 'topic' ? loaded.get(id || sid(webSearch)) : null;
+    const s = kind === 'source' ? sourceById(id) : null;
+    if (got && got.error && s && s.kind === 'rss' && /HTTP 40[13]/.test(got.error)) {
+      empty.append(el('p', '', `${s.name} doesn’t let NewsFeed read its feed (${got.error}). `
+          + 'Its headlines can still come through Google News, with a link to each article on the site.'),
+      button('primary subtle', 'Get its headlines via Google News', () => replaceWithNews(s)));
+    } else if (got && got.error && /HTTP 4(04|10)/.test(got.error)) {
+      empty.append(el('p', '', `The feed is no longer at this address (${got.error}). Search for the source again to find its new feed.`));
+    } else {
+      empty.append(el('p', '', got && got.error ? `Could not load: ${got.error}` : kind === 'unread' ? 'All caught up.' : 'No articles yet.'));
+    }
   }
 }
 
@@ -853,9 +892,8 @@ async function follow(s, { quiet = false, fetchNow = true } = {}) {
     if (!quiet) toast(`You already follow ${s.name}`);
     return false;
   }
-  const entry = s.kind === 'topic'
-      ? topicEntry(s)
-      : { kind: 'rss', url: s.url, name: s.name, lang: s.lang || null, country: s.country || null };
+  const entry = sourceEntry(s);
+  if (!entry) return false;
   sources.push(entry);
   saveSources();
   if (webSearch && sid(webSearch) === sid(entry)) {
@@ -932,8 +970,8 @@ function showGroup(g) {
     box.checked = following;
     box.disabled = following;
     const name = el('span', 'name', s.name);
-    name.append(el('span', 'detail', following ? 'Following' : hostOf(s.url)));
-    row.append(box, mark(s.country, s.url), name);
+    name.append(el('span', 'detail', following ? 'Following' : sourceDetail(s)));
+    row.append(box, mark(s.country, sourceLink(s)), name);
     return row;
   }));
 }
@@ -1112,7 +1150,7 @@ async function searchSources() {
   results.id = 'source-results';
   $('add-body').replaceChildren(sourceSearchForm(q), results);
   $('source-q').blur();
-  const builtIn = directory.sources.filter(s => nameMatches(q, s.name, hostOf(s.url))).map(s => ({ kind: 'rss', ...s }));
+  const builtIn = directory.sources.filter(s => nameMatches(q, s.name, s.url ? hostOf(s.url) : s.site)).map(s => ({ kind: 'rss', ...s }));
   renderSourceResults(builtIn, null);
   const [lang, country] = defaultEdition().split('-');
   let found;
@@ -1152,12 +1190,12 @@ function renderSourceResults(builtIn, sites) {
     box.disabled = following;
     const name = el('span', 'name', s.name);
     name.append(el('span', 'detail', following ? 'Following' : detail));
-    label.append(box, mark(s.country, s.url), name);
+    label.append(box, mark(s.country, sourceLink(s)), name);
     return label;
   };
   if (builtIn.length) {
     rows.push(el('div', 'group-head', 'Built in'));
-    for (const s of builtIn) rows.push(row(s, hostOf(s.url)));
+    for (const s of builtIn) rows.push(row(s, sourceDetail(s)));
   }
   for (const site of byPreferredLanguage(sites || [])) {
     const head = el('div', 'group-head', site.name);
@@ -1186,11 +1224,48 @@ function renderSourceResults(builtIn, sites) {
     : 'No feeds found for that name.';
 }
 
-/** A site without a feed we can read, followed as a news search for its own articles (site:…). */
+/** A site without a feed we can read, followed through Google News instead (its site:… headlines). */
 async function followSiteHeadlines(site) {
-  const topic = topicEntry({ q: `site:${site.host}`, editions: [defaultEdition()], name: site.name });
+  const entry = sourceEntry({ kind: 'news', site: site.host, edition: defaultEdition(), name: site.name });
   $('add-dialog').close();
-  if (await follow(topic)) setView('topic:' + sid(topic));
+  if (await follow(entry)) setView('source:' + sid(entry));
+}
+
+/**
+ * A feed that refuses NewsFeed, swapped in place for its site's headlines via Google News (same
+ * name and flag, the edition of its language and country).
+ */
+async function replaceWithNews(s) {
+  const edition = editionFor(s.lang || 'en', (s.country || '').slice(0, 2).toUpperCase()) || defaultEdition();
+  const host = hostOf(s.url).replace(/^(feeds?|rss)\./, '');
+  // A section's feed (…/football/rss) becomes that section's headlines, if Google News has them
+  // under that path; otherwise the whole site's.
+  const path = new URL(s.url).pathname.split('/').filter(p => p && !/^(rss|feeds?|atom|index)$|\.(xml|rss)$/i.test(p));
+  const sites = [path.length && path.length <= 2 ? `${host}/${path.join('/')}` : null, host].filter(Boolean);
+  toast(`Looking for ${s.name}’s headlines…`);
+  for (const site of sites) {
+    const entry = sourceEntry({ kind: 'news', site, edition, name: s.name, lang: s.lang, country: s.country });
+    let feed;
+    try {
+      feed = entry && await getJson(apiUrl(entry));
+    } catch (e) {
+      continue;
+    }
+    if (!feed || feed.items.length < 3) continue;
+    const i = sources.indexOf(s);
+    if (i < 0) return;
+    loaded.delete(sid(s));
+    loaded.set(sid(entry), { items: feed.items, title: feed.title, language: feed.language, error: null, at: Date.now() });
+    if (sources.some(x => sid(x) === sid(entry))) sources.splice(i, 1);
+    else sources[i] = entry;
+    saveSources();
+    prefs.view = 'source:' + sid(entry);
+    savePrefs();
+    rebuild();
+    toast(`${s.name} now comes through Google News`);
+    return;
+  }
+  toast(`Google News has no recent headlines from ${host}`);
 }
 
 function showAddressForm(url = '') {
@@ -1353,7 +1428,7 @@ async function importFile(file) {
   let list = [], savedList = [];
   if (/^\s*[{[]/.test(text)) {
     const data = JSON.parse(text);
-    list = (Array.isArray(data) ? data : data.sources || []).filter(s => s && (s.kind === 'topic' ? s.q : s.url));
+    list = (Array.isArray(data) ? data : data.sources || []).filter(Boolean);
     savedList = Array.isArray(data.saved) ? data.saved.filter(a => a && a.key && a.title) : [];
   } else {
     const doc = new DOMParser().parseFromString(text, 'text/xml');
@@ -1364,10 +1439,8 @@ async function importFile(file) {
   let added = 0;
   const fresh = [];
   for (const s of list) {
-    const entry = s.kind === 'topic'
-        ? topicEntry(s)
-        : { kind: 'rss', url: s.url, name: s.name || hostOf(s.url), lang: s.lang || null, country: s.country || guessCountry(s.url) };
-    if (sources.some(x => sid(x) === sid(entry))) continue;
+    const entry = sourceEntry(s.kind === 'topic' || s.kind === 'news' ? s : { ...s, country: s.country || guessCountry(s.url || '') });
+    if (!entry || sources.some(x => sid(x) === sid(entry))) continue;
     sources.push(entry);
     fresh.push(entry);
     added++;
@@ -1504,18 +1577,46 @@ function onKey(e) {
   action();
 }
 
+/**
+ * Stored sources, checked; a built-in feed that has been replaced (the directory entry says which
+ * address it replaces, as The Guardian's, which refuses NewsFeed) becomes its replacement.
+ */
+function upgradeSources(stored, replaced = new Map()) {
+  const out = [];
+  let changed = false;
+  for (const s of Array.isArray(stored) ? stored : []) {
+    const replacement = s && s.url && directory.sources.find(d => d.replaces === s.url);
+    const entry = sourceEntry(replacement ? { kind: 'rss', ...replacement } : s);
+    changed = changed || Boolean(replacement) || !entry;
+    if (replacement && entry) replaced.set(sid(s), sid(entry));
+    if (entry && !out.some(x => sid(x) === sid(entry))) out.push(entry);
+  }
+  if (changed) store(KEY_SOURCES, out);
+  return out;
+}
+
+/** The saved view, moved to a replaced source's replacement; "all" if its source is gone. */
+function upgradeView(view, replaced) {
+  const [kind, id] = splitView(view);
+  if (kind !== 'source' && kind !== 'topic') return view;
+  if (replaced.has(id)) return `source:${replaced.get(id)}`;
+  return sources.some(s => sid(s) === id) ? view : 'all';
+}
+
 async function start() {
   try {
     directory = await getJson('/api/directory');
   } catch (e) {
     toast('Could not reach the NewsFeed server');
   }
-  sources = load(KEY_SOURCES, []).filter(s => s && (s.kind === 'topic' ? s.q && s.lang && s.country : s.url && s.name));
+  const replaced = new Map();
+  sources = upgradeSources(load(KEY_SOURCES, []), replaced);
   readKeys = new Set(load(KEY_READ, []));
   saved = new Map(load(KEY_SAVED, []).filter(a => a && a.key).map(a => [a.key, a]));
   prefs = { ...prefs, ...load(KEY_PREFS, {}) };
   if (!Array.isArray(prefs.langs)) prefs.langs = [];
   if (prefs.view === 'web') prefs.view = 'all';
+  prefs.view = upgradeView(prefs.view, replaced);
 
   $('q').addEventListener('input', onQuery);
   $('sort').addEventListener('change', () => { prefs.sort = $('sort').value; savePrefs(); renderList(); });

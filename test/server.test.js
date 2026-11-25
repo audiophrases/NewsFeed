@@ -87,10 +87,15 @@ test('directory', async () => {
   const groups = new Set(body.groups.map(g => g.id));
   for (const s of body.sources) {
     assert.ok(groups.has(s.group), s.name);
-    assert.match(s.url, /^https:\/\//);
+    // A feed, or (for a site that refuses NewsFeed) its headlines via Google News, replacing its feed.
+    if (s.kind === 'news') {
+      assert.match(s.site, /^[a-z0-9.-]+\.[a-z]+(\/[a-z0-9/-]*)?$/, s.name);
+      assert.match(s.edition, /^[a-z]{2}-[A-Z]{2}$/, s.name);
+      assert.match(s.replaces, /^https:\/\//, s.name);
+    } else assert.match(s.url, /^https:\/\//);
     if (s.country) assert.ok(fs.existsSync(path.join(__dirname, '..', 'public', 'flags', `${s.country}.png`)), s.country);
   }
-  assert.equal(new Set(body.sources.map(s => s.url)).size, body.sources.length, 'no duplicate feeds');
+  assert.equal(new Set(body.sources.map(s => s.url || s.site)).size, body.sources.length, 'no duplicate feeds');
 });
 
 test('feed, following redirects', async () => {
