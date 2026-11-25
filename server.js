@@ -12,10 +12,11 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 
-const { getText, reason } = require('./lib/fetch');
-const { parseFeed, feedLinks, looksLikeFeed } = require('./lib/feeds');
+const { getText, getBytes, reason } = require('./lib/fetch');
+const { parseFeed, feedLinks, looksLikeFeed, tags, attrOf, absolute, entities } = require('./lib/feeds');
 const { extractArticle } = require('./lib/article');
 const { candidateSites, feedBelongs, feedKey } = require('./lib/sources');
+const { iconCandidates, imageType, ICON_MAX_BYTES } = require('./lib/icons');
 
 const PORT = Number(process.env.PORT) || 8091;
 // All interfaces, so phones on the same Wi-Fi can connect; HOST=127.0.0.1 keeps it to this PC.
@@ -24,6 +25,7 @@ const PUBLIC = path.join(__dirname, 'public');
 const DIRECTORY = JSON.parse(fs.readFileSync(path.join(__dirname, 'sources.json'), 'utf8'));
 const FEED_CACHE_MS = 5 * 60 * 1000;
 const ARTICLE_CACHE_MS = 60 * 60 * 1000;
+const ICON_CACHE_MS = 24 * 60 * 60 * 1000;
 const CACHE_LIMIT = 500;
 /** Editions one topic may search at once (each is one more Google News request). */
 const MAX_EDITIONS = 5;
@@ -62,26 +64,32 @@ async function readFeed(url) {
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-let searchesRunning = 0;
-const searchesWaiting = [];
-
-/** Runs a news search when one of the slots is free, so Google isn't sent a burst at once. */
-function inSearchSlot(work) {
-  const run = async () => {
-    try {
-      return await work();
-    } finally {
-      const next = searchesWaiting.shift();
-      if (next) next(); // hand the slot straight on
-      else searchesRunning--;
+/** A runner that does at most n pieces of work at once; the rest wait their turn. */
+function slots(n) {
+  let running = 0;
+  const waiting = [];
+  return work => {
+    const run = async () => {
+      try {
+        return await work();
+      } finally {
+        const next = waiting.shift();
+        if (next) next(); // hand the slot straight on
+        else running--;
+      }
+    };
+    if (running < n) {
+      running++;
+      return run();
     }
+    return new Promise(resolve => waiting.push(resolve)).then(run);
   };
-  if (searchesRunning < SEARCH_SLOTS) {
-    searchesRunning++;
-    return run();
-  }
-  return new Promise(resolve => searchesWaiting.push(resolve)).then(run);
 }
+
+/** News searches wait for one of a few slots, so Google isn't sent a burst at once. */
+const inSearchSlot = slots(SEARCH_SLOTS);
+/** Icon lookups too: a list of new sources shouldn't set off dozens of home page fetches at once. */
+const inIconSlot = slots(4);
 
 /** News about a topic from Google News (no key needed), tried twice; Bing News if Google fails. */
 async function searchNews(q, lang, country) {
@@ -147,10 +155,24 @@ const describeFeed = (url, feed, title) => ({
 const isCommentsFeed = l => /\/comments\/(feed|rss)|[?&]feed=comments/i.test(l.url)
     || /\b(comments?|comentaris|comentarios|commentaires|kommentare|commenti)\b/i.test(l.title || '');
 
-/** Feeds for an address: itself if it is a feed, else those the page links to or common paths. */
+/** A web page's site name: Open Graph's og:site_name, else its host. */
+function siteNameOf(html, url) {
+  for (const t of tags(html, 'meta')) {
+    if ((attrOf(t, 'property') || attrOf(t, 'name') || '').toLowerCase() !== 'og:site_name') continue;
+    const name = entities(attrOf(t, 'content') || '').trim();
+    if (name) return name;
+  }
+  return new URL(url).hostname.replace(/^www\./, '');
+}
+
+/**
+ * Feeds for an address: itself if it is a feed, else those the page links to or common paths.
+ * Each says which site it is on, so a section feed called "Europe" can be named after its site.
+ */
 async function discover(url) {
   const page = await getText(url);
   if (looksLikeFeed(page.text)) return [describeFeed(page.url, parseFeed(page.text, page.url))];
+  const site = siteNameOf(page.text, page.url);
   let links = feedLinks(page.text, page.url).filter(l => !isCommentsFeed(l));
   if (!links.length) {
     const origin = new URL(page.url).origin;
@@ -159,7 +181,7 @@ async function discover(url) {
   const checked = await Promise.all(links.slice(0, 8).map(async l => {
     try {
       const feed = await cached('feed|' + l.url, FEED_CACHE_MS, () => readFeed(l.url));
-      return describeFeed(l.url, feed, l.title);
+      return { ...describeFeed(l.url, feed, l.title), site };
     } catch (e) {
       return null;
     }
@@ -213,6 +235,28 @@ async function findSources(q, lang, country) {
     }
   }
   return { sites: out };
+}
+
+/** A site's icon, as { type, bytes }, or null when it has none we can use (remembered too). */
+async function siteIcon(origin) {
+  let candidates;
+  try {
+    // The icon links are in the page's <head>: no need to read a whole home page for them.
+    const page = await getText(origin + '/', {}, 512 * 1024);
+    candidates = iconCandidates(page.text, page.url);
+  } catch (e) {
+    candidates = iconCandidates('', origin + '/');
+  }
+  for (const c of candidates.slice(0, 4)) {
+    try {
+      const got = await getBytes(c.url, { Accept: 'image/*,*/*;q=0.5' }, ICON_MAX_BYTES);
+      const type = got && imageType(got.bytes);
+      if (type) return { type, bytes: got.bytes };
+    } catch (e) {
+      // try the next one
+    }
+  }
+  return null;
 }
 
 async function readArticle(url) {
@@ -288,6 +332,19 @@ async function handle(req, res) {
     const url = webAddress(u);
     if (!url) return json(res, 400, { error: 'Not a web address' });
     return api(res, `discover ${url}`, () => discover(url));
+  }
+
+  if (u.pathname === '/api/icon') {
+    const url = webAddress(u);
+    if (!url) return json(res, 400, { error: 'Not a web address' });
+    const origin = new URL(url).origin;
+    const icon = await cached('icon|' + origin, ICON_CACHE_MS, () => inIconSlot(() => siteIcon(origin)).catch(() => null));
+    if (!icon) return send(res, 404, 'No icon', 'text/plain', { 'Cache-Control': 'public, max-age=86400' });
+    // The bytes come from another site: never let them run as a page here (an SVG could try).
+    return send(res, 200, icon.bytes, icon.type, {
+      'Cache-Control': 'public, max-age=604800', 'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    });
   }
 
   if (u.pathname === '/api/article') {

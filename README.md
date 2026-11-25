@@ -42,7 +42,10 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   by name** ("El Nacional", "Betevé") in *Add sources*: NewsFeed finds the outlets Google News
   knows by that name and the feeds Feedly lists for it, checks every feed works, and shows each
   with its newest headline. A site's or feed's address works too. For a site whose feed can't be
-  read, you can follow its headlines via Google News instead (a `site:` search).
+  read, you can follow its headlines via Google News instead (a `site:` search). Section feeds
+  are named after their site ("The Economist – Europe"). Sources show their country's flag, or the
+  site's own icon when the country isn't known; topic articles show their outlet's icon. NewsFeed's
+  server finds and caches the icons, so no icon service learns which sites you follow.
 - **Topics** – follow anything ("climate", `"champions league"`, `AI -crypto`) and get headlines
   about it from every outlet, via Google News (Bing News as a fallback), in the edition you pick,
   and **also in up to four other languages**. Names work as they are in every language; for other
@@ -82,6 +85,7 @@ Your sources, read marks, saved articles and settings are stored in the browser 
 | `GET /api/search?q=&editions=ca-ES,en-US` | news about a topic, in one or more editions (up to 5; or `lang=&country=`) |
 | `GET /api/sources?q=&lang=&country=` | outlets and working feeds for a name |
 | `GET /api/discover?url=` | feeds a site offers |
+| `GET /api/icon?url=` | the icon of that address's site (cached a day; 404 if it has none) |
 | `GET /api/article?url=` | an article's readable text |
 
 The server won't fetch addresses on your local network (so a page can't use it to reach your

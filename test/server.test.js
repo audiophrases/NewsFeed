@@ -23,6 +23,12 @@ const site = http.createServer((req, res) => {
     res.writeHead(301, { Location: '/rss.xml' });
     return res.end();
   }
+  // Asked for as localhost, the site is one without icons.
+  if (req.url === '/' && /^localhost:/.test(req.headers.host)) return res.end('<html><body><p>No icons here.</p></body></html>');
+  if (req.url === '/favicon-32.png') {
+    res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); // mislabelled, as sites do
+    return res.end(PNG);
+  }
   const u = new URL(req.url, siteUrl);
   if (u.pathname === '/gnews') return res.end(newsSearchXml(u.searchParams.get('q'), u.searchParams.get('hl')));
   if (u.pathname === '/feedly') return res.end(JSON.stringify(feedSearchJson()));
@@ -49,6 +55,9 @@ const feedSearchJson = () => ({ results: [
   { feedId: `feed/${siteUrl}/latin1.xml`, title: 'Example News en français', website: siteUrl, subscribers: 5 },
   { feedId: 'feed/https://unrelated.example/feed', title: 'Unrelated', website: 'https://unrelated.example' },
 ] });
+
+/** The start of a PNG file: enough for the server to recognise it as an image. */
+const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000200000002008060000007a7af4', 'hex');
 
 let siteUrl, appUrl;
 
@@ -169,4 +178,19 @@ test('search for a source by name: the outlet’s own feeds and the listed ones,
   assert.equal(found.feeds[0].count, 2);
   assert.equal(found.feeds[0].sample, 'Climate talks reach a deal in Bonn');
   assert.equal((await api('/api/sources', { q: '' })).status, 400);
+});
+
+test('site icons: the one the home page names, checked to be an image, kept from running as a page', async () => {
+  const res = await fetch(`${appUrl}/api/icon?url=${encodeURIComponent(siteUrl + '/any/page')}`);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'image/png', 'type from the bytes, not the label');
+  assert.match(res.headers.get('content-security-policy'), /sandbox/);
+  assert.deepEqual(Buffer.from(await res.arrayBuffer()), PNG);
+  const none = await fetch(`${appUrl}/api/icon?url=${encodeURIComponent('http://localhost:' + new URL(siteUrl).port + '/story')}`);
+  assert.equal(none.status, 404, 'its page names no icon we can get and there is no /favicon.ico');
+});
+
+test('found feeds say which site they are on', async () => {
+  const { body } = await api('/api/discover', { url: siteUrl + '/' });
+  assert.deepEqual(body.map(f => f.site), ['Example News', 'Example News']);
 });

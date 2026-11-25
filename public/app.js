@@ -119,7 +119,7 @@ async function fetchSource(s) {
   const id = sid(s);
   try {
     const feed = await getJson(apiUrl(s));
-    loaded.set(id, { items: feed.items, title: feed.title, language: feed.language, error: null, at: Date.now() });
+    loaded.set(id, { items: feed.items, title: feed.title, language: feed.language, siteUrl: feed.siteUrl, error: null, at: Date.now() });
   } catch (e) {
     const old = loaded.get(id);
     loaded.set(id, { items: old ? old.items : [], language: old && old.language, error: e.message, at: Date.now() });
@@ -227,6 +227,7 @@ function rebuild() {
         key, sid: id, sids: [id], title: item.title, link, summary: item.summary, image: item.image,
         author: item.author, categories: item.categories || [], publishedAt: item.publishedAt || 0,
         sourceName: item.publisher || s.name, country: item.publisher ? null : s.country,
+        site: item.publisherUrl || got.siteUrl || s.url || null,
         lang: item.lang || s.lang || got.language || null,
       };
       articles.push(a);
@@ -250,6 +251,7 @@ function webArticles() {
       key, sid: sid(webSearch), sids: [sid(webSearch)], title: item.title, link, summary: item.summary,
       image: item.image, author: item.author, categories: item.categories || [], publishedAt: item.publishedAt || 0,
       sourceName: item.publisher || webSearch.name, country: null, lang: item.lang || webSearch.lang,
+      site: item.publisherUrl || null,
     };
   });
 }
@@ -350,7 +352,7 @@ function sourceItem(s, kind) {
   const id = sid(s);
   const view = `${kind}:${id}`;
   const li = navItem(view, s.name, kind === 'topic' ? 'i-search' : 'i-text', '');
-  if (kind === 'source') li.firstChild.replaceWith(flag(s.country));
+  if (kind === 'source') li.firstChild.replaceWith(mark(s.country, loaded.get(sid(s))?.siteUrl || s.url));
   const got = loaded.get(id);
   const badge = li.querySelector('.badge');
   if (got && got.error && !got.items.length) {
@@ -467,7 +469,7 @@ function articleRow(a, query) {
   li.dataset.key = a.key;
   const body = el('div', 'body');
   const meta = el('div', 'meta');
-  if (a.country) meta.append(flag(a.country));
+  if (a.country || a.site) meta.append(mark(a.country, a.site));
   meta.append(el('span', 'src', a.sourceName));
   if (a.publishedAt) meta.append(el('span', '', '· ' + age(a.publishedAt)));
   if (saved.has(a.key)) {
@@ -627,7 +629,7 @@ function renderReader(a) {
   const body = $('reader-body');
   body.scrollTop = 0;
   const meta = el('div', 'r-meta');
-  if (a.country) meta.append(flag(a.country));
+  if (a.country || a.site) meta.append(mark(a.country, a.site));
   meta.append(el('strong', '', a.sourceName));
   if (a.author && a.author !== a.sourceName) meta.append(el('span', '', a.author));
   if (a.publishedAt) {
@@ -931,7 +933,7 @@ function showGroup(g) {
     box.disabled = following;
     const name = el('span', 'name', s.name);
     name.append(el('span', 'detail', following ? 'Following' : hostOf(s.url)));
-    row.append(box, flag(s.country), name);
+    row.append(box, mark(s.country, s.url), name);
     return row;
   }));
 }
@@ -1150,7 +1152,7 @@ function renderSourceResults(builtIn, sites) {
     box.disabled = following;
     const name = el('span', 'name', s.name);
     name.append(el('span', 'detail', following ? 'Following' : detail));
-    label.append(box, flag(s.country), name);
+    label.append(box, mark(s.country, s.url), name);
     return label;
   };
   if (builtIn.length) {
@@ -1169,7 +1171,7 @@ function renderSourceResults(builtIn, sites) {
       rows.push(note);
     }
     for (const f of site.feeds) {
-      const s = { kind: 'rss', url: f.url, name: f.title || site.name, lang: f.language, country: guessCountry(f.url, f.language) };
+      const s = { kind: 'rss', url: f.url, name: sourceTitle(site.name, f.title), lang: f.language, country: guessCountry(f.url, f.language) };
       const detail = [`${f.count} articles`, f.language ? languageName(f.language) : '', f.sample ? `“${f.sample}”` : hostOf(f.url)];
       rows.push(row(s, detail.filter(Boolean).join(' · ')));
     }
@@ -1227,7 +1229,9 @@ async function discoverFeeds() {
     return;
   }
   const have = new Set(sources.map(sid));
-  addCandidates = found.map(f => ({ kind: 'rss', url: f.url, name: f.title || hostOf(f.url), lang: f.language, country: guessCountry(f.url, f.language) }));
+  addCandidates = found.map(f => ({
+    kind: 'rss', url: f.url, name: sourceTitle(f.site, f.title) || hostOf(f.url), lang: f.language, country: guessCountry(f.url, f.language),
+  }));
   addMode = 'found';
   setStep('Feeds found', 'Add', true);
   $('address-help').textContent = found.length === 1 ? 'Found this feed:' : `Found ${found.length} feeds. Pick the ones you want:`;
@@ -1244,6 +1248,21 @@ async function discoverFeeds() {
     row.append(box, name);
     return row;
   }));
+}
+
+/**
+ * A feed's name in the sidebar: its own title, with its site's name in front when the title doesn't
+ * say which site it is ("Europe" from The Economist becomes "The Economist – Europe").
+ */
+function sourceTitle(site, title) {
+  const clean = (title || '').replace(/\s*[»|:–-]\s*(rss|feed|atom)( feed)?$/i, '').trim();
+  if (!clean) return site || '';
+  if (!site) return clean;
+  const core = s => fold(s).replace(/^the\s+/, '').replace(/\.[a-z]{2,3}(\.[a-z]{2})?$/, '').replace(/[^\p{L}\p{N}]/gu, '');
+  const t = core(clean), n = core(site);
+  // "ElNacional.cat" names El Nacional.cat; "News" doesn't name BBC News.
+  const named = !n || t.includes(n) || (t.length >= n.length * 0.6 && n.includes(t));
+  return named ? clean : `${site} – ${clean}`;
 }
 
 /** A flag for a feed outside the directory, from its country domain (as Play the News does). */
@@ -1368,6 +1387,30 @@ function el(tag, className, text) {
   if (className) e.className = className;
   if (text != null) e.textContent = text;
   return e;
+}
+
+/** A source's flag when its country is known, else its site's own icon (link: any page of the site). */
+function mark(country, link) {
+  return country ? flag(country) : siteIcon(link);
+}
+
+/**
+ * The icon a site shows in browser tabs, found and kept by the server (so no icon service learns
+ * which sites you follow); a blank if it has none.
+ */
+function siteIcon(link) {
+  let origin;
+  try {
+    origin = new URL(link).origin;
+  } catch (e) {
+    return flag(null);
+  }
+  const img = el('img', 'flag icon');
+  img.src = `/api/icon?url=${encodeURIComponent(origin)}`;
+  img.alt = '';
+  img.loading = 'lazy';
+  img.addEventListener('error', () => img.replaceWith(flag(null)));
+  return img;
 }
 
 /** A 20×15 flag, or a blank of the same size so names stay in one column. */

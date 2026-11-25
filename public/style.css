@@ -232,6 +232,9 @@ kbd {
 
 .flag { width: 20px; height: 15px; flex: none; display: inline-block; border-radius: 2px; object-fit: cover; }
 
+/* A site's own icon where there is no flag: square, on a light tile so dark logos show on dark. */
+.flag.icon { width: 16px; height: 16px; margin: 0 2px; padding: 1px; border-radius: 4px; background: #fff; object-fit: contain; }
+
 /* ---- list ---------------------------------------------------------------------------- */
 
 .toolbar {
@@ -334,6 +337,8 @@ select {
 .articles .meta .src { overflow: hidden; text-overflow: ellipsis; }
 
 .articles .meta .flag { width: 16px; height: 12px; }
+
+.articles .meta .flag.icon { width: 14px; height: 14px; margin: 0 1px; }
 
 .articles .meta .star { width: 14px; height: 14px; color: var(--star); flex: none; }
 
