@@ -4,7 +4,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { sameHeadline, slugMatch, sitemapsInRobots, pickSitemaps, findInSitemap } = require('../lib/findarticle');
+const { sameHeadline, slugMatch, sitemapsInRobots, pickSitemaps, findInSitemap, siteLinks, findInLinks } = require('../lib/findarticle');
 
 const HEADLINE = 'Torredembarra s’adhereix a l’Associació per l’Impuls Metropolità del Camp de Tarragona';
 
@@ -36,4 +36,25 @@ test('sitemaps: from robots.txt, news ones and the newest from an index, an arti
     <url><loc>https://x.cat/torredembarra-sadhereix-a-lassociacio-per-limpuls-metropolita-del-camp-de-tarragona/</loc></url></urlset>`;
   assert.equal(findInSitemap(slugs, HEADLINE), 'https://x.cat/torredembarra-sadhereix-a-lassociacio-per-limpuls-metropolita-del-camp-de-tarragona/');
   assert.equal(findInSitemap(slugs, 'Una notícia que no hi és'), null);
+});
+
+test('a home page\'s links: the article by its link\'s text, else its address, and only on that site', () => {
+  // As Altafulla Ràdio's home page links its news (its feed is years out of date).
+  const home = `<ul><li><a href="/">Inici</a></li>
+    <li><a href="https://twitter.com/altafullaradio">Twitter</a></li>
+    <li><a href="/noticia/el-temps-a-altafulla_n22390"><span>El temps</span> a Altafulla</a></li>
+    <li><a class="t" href="/noticia/torredembarra-enllesteix-la-regulacio-dels-habitatges-turistics_n22398">Torredembarra enllesteix
+      la regulaci&oacute; dels habitatges tur&iacute;stics</a></li>
+    <li><a href="https://www.altafullaradio.cat/noticia/n22401">Altafulla aprova el pressupost</a></li></ul>`;
+  const links = siteLinks(home, 'https://altafullaradio.cat/');
+  assert.deepEqual(links.map(l => l.text), ['El temps a Altafulla', 'Torredembarra enllesteix la regulació dels habitatges turístics',
+    'Altafulla aprova el pressupost'], 'its own pages (www or not), not other sites or the home page');
+  assert.equal(findInLinks(links, 'Torredembarra enllesteix la regulació dels habitatges turístics'),
+      'https://altafullaradio.cat/noticia/torredembarra-enllesteix-la-regulacio-dels-habitatges-turistics_n22398');
+  assert.equal(findInLinks(links, 'Altafulla aprova el pressupost'), 'https://www.altafullaradio.cat/noticia/n22401',
+      'by its text when the address is just a number');
+  assert.equal(findInLinks(siteLinks(`<a href="/torredembarra-sadhereix-a-lassociacio-per-limpuls-metropolita-del-camp-de-tarragona">Llegir més</a>`,
+      'https://infocamp.cat/'), HEADLINE), 'https://infocamp.cat/torredembarra-sadhereix-a-lassociacio-per-limpuls-metropolita-del-camp-de-tarragona',
+      'by its address when the text says nothing');
+  assert.equal(findInLinks(links, 'Una notícia que no hi és'), null);
 });

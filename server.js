@@ -341,25 +341,28 @@ const sitemapsOf = origin => cached('sitemaps|' + origin, 30 * 60 * 1000, async 
   return out.slice(0, 3);
 });
 
-/** A site's own feeds (remembered for half an hour). */
-const siteFeedsOf = origin => cached('sitefeeds|' + origin, 30 * 60 * 1000, async () => {
+/** A site's home page, for finding its articles: its own feeds, and its links (remembered for half an hour). */
+const homeOf = origin => cached('home|' + origin, 30 * 60 * 1000, async () => {
   const page = await getText(origin + '/', {}, 1024 * 1024);
-  const links = feedLinks(page.text, page.url).filter(l => !isCommentsFeed(l)).map(l => l.url);
-  return [...links.slice(0, 3), new URL('/feed/', page.url).href];
+  const feeds = feedLinks(page.text, page.url).filter(l => !isCommentsFeed(l)).map(l => l.url);
+  return { feeds: [...feeds.slice(0, 3), new URL('/feed/', page.url).href], links: onSite.siteLinks(page.text, page.url) };
 });
 
 /**
- * An article's address found on its own site from its headline: in its feeds, its WordPress
- * search feed, or its sitemaps. Null if it isn't there.
+ * An article's address found on its own site from its headline: in its feeds, on its home page
+ * (some sites' feeds are years out of date), its WordPress search feed, or its sitemaps. Null if
+ * it isn't there.
  */
 async function findOnSite(site, title) {
   const origin = new URL(site).origin;
-  const feeds = await siteFeedsOf(origin).catch(() => []);
-  for (const url of [...new Set(feeds)]) {
+  const home = await homeOf(origin).catch(() => ({ feeds: [], links: [] }));
+  for (const url of [...new Set(home.feeds)]) {
     const feed = await cached('feed|' + url, FEED_CACHE_MS, () => readFeed(url)).catch(() => null);
     const hit = feed && feed.items.find(i => i.link && onSite.sameHeadline(i.title, title));
     if (hit) return hit.link;
   }
+  const linked = onSite.findInLinks(home.links, title);
+  if (linked) return linked;
   const search = `${origin}/?s=${encodeURIComponent(title.slice(0, 100))}&feed=rss2`;
   const found = await readFeed(search).catch(() => null);
   const hit = found && found.items.find(i => i.link && onSite.sameHeadline(i.title, title));
@@ -382,7 +385,7 @@ async function locate(link, title, site) {
     if (!title || !site) throw e;
     const found = await findOnSite(site, title).catch(() => null);
     if (found) return found;
-    throw new FetchError(`${e.message}, and ${new URL(site).hostname.replace(/^www\./, '')} doesn’t list it in its feeds or sitemaps`);
+    throw new FetchError(`${e.message}, and ${new URL(site).hostname.replace(/^www\./, '')} doesn’t list it on its home page, in its feeds or in its sitemaps`);
   }
 }
 

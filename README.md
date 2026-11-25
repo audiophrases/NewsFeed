@@ -60,8 +60,9 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   open, one at a time; your browser and the server remember every answer, and after Google
   refuses a lookup (or redirects it, as it may for servers in data centres) the server leaves it
   alone for 30 minutes. When Google won't say, the article is looked for on its own site by its
-  headline: in the site's feeds, its WordPress search and its sitemaps (this finds some outlets'
-  articles, not those that list them nowhere public).
+  headline: in the site's feeds, among the links on its home page (some sites' feeds are years
+  out of date), in its WordPress search and in its sitemaps. This finds some outlets' articles,
+  not older ones on a site whose feed, sitemaps and home page don't list them.
 - **Edit** – the ✎ next to *Topics* or *Sources* lists everything you follow: type to rename
   (empty gives back the original name), reorder with the arrows or by dragging the handle, remove,
   or open more settings: a feed's flag, language and address; a Google News source's site, edition

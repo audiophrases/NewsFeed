@@ -61,7 +61,7 @@ const site = http.createServer((req, res) => {
   // Asked for as localhost, the site is one without icons.
   if (req.url === '/' && /^localhost:/.test(req.headers.host)) {
     return res.end('<html><head><link rel="alternate" type="application/rss+xml" href="/local-feed.xml"></head>'
-        + '<body><p>No icons here.</p></body></html>');
+        + '<body><p>No icons here.</p><a href="/story">The council approves the budget for next year</a></body></html>');
   }
   // That site's own feed, with a topic's article in it (found by its headline when Google won't say).
   if (req.url === '/local-feed.xml') {
@@ -305,7 +305,14 @@ test('when Google News won\'t say, the article is found on its own site by its h
   assert.equal(found.status, 200);
   assert.equal(found.body.url, site + '/story');
   assert.equal(lookups.length, asked, 'Google is still left alone');
+  // Not in its feed (some sites' feeds are years old), but linked from its home page.
+  const linked = await api('/api/article', {
+    url: `${siteUrl}/rss/articles/CBMiOnHomePage_0000000009`, site, title: 'The council approves the budget for next year',
+  });
+  assert.equal(linked.status, 200);
+  assert.equal(linked.body.url, site + '/story');
   const missing = await api('/api/article', { url: `${siteUrl}/rss/articles/CBMiNotOnSite_00000000008`, title: 'A headline nobody published', site });
   assert.equal(missing.status, 502);
-  assert.match(missing.body.error, /isn’t answering NewsFeed’s lookups just now, and localhost doesn’t list it in its feeds or sitemaps/);
+  assert.match(missing.body.error,
+      /isn’t answering NewsFeed’s lookups just now, and localhost doesn’t list it on its home page, in its feeds or in its sitemaps/);
 });
