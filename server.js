@@ -18,6 +18,8 @@ const { extractArticle } = require('./lib/article');
 const { candidateSites, feedBelongs, feedKey } = require('./lib/sources');
 const { iconCandidates, imageType, ICON_MAX_BYTES } = require('./lib/icons');
 const googleLinks = require('./lib/googlenews');
+const onSite = require('./lib/findarticle');
+const zlib = require('zlib');
 
 const PORT = Number(process.env.PORT) || 8091;
 // All interfaces, so phones on the same Wi-Fi can connect; HOST=127.0.0.1 keeps it to this PC.
@@ -285,7 +287,7 @@ async function articleAddress(link) {
   const inside = googleLinks.addressInside(id);
   if (inside) return inside;
   return inLookupSlot(async () => {
-    if (Date.now() < googlePausedUntil) throw new FetchError('Google News isn’t answering lookups just now');
+    if (Date.now() < googlePausedUntil) throw new FetchError('Google News isn’t answering NewsFeed’s lookups just now');
     try {
       const page = await getText(`${googleNewsSite()}/rss/articles/${id}`, {}, 1024 * 1024);
       const signature = googleLinks.signatureOf(page.text);
@@ -295,14 +297,91 @@ async function articleAddress(link) {
       if (!address) throw new FetchError('Google News didn’t say where this article is');
       return address;
     } catch (e) {
-      if (/HTTP (403|429)/.test(e.message)) {
+      // Refused, or sent elsewhere instead of answered (a check for unusual traffic, a consent
+      // page): leave Google alone for a while rather than insist.
+      if (/HTTP (30[1-8]|403|429)/.test(e.message)) {
         googlePausedUntil = Date.now() + GOOGLE_PAUSE_MS;
         console.warn(`Google News refused a lookup (${e.message}); pausing lookups for ${GOOGLE_PAUSE_MS / 60000} min`);
-        throw new FetchError('Google News isn’t answering lookups just now');
+        throw new FetchError('Google News isn’t answering NewsFeed’s lookups just now');
       }
       throw e;
     }
   });
+}
+
+/** A sitemap's text (they may be gzipped), at most 20 MB. */
+async function readSitemap(url) {
+  const got = await getBytes(url, {}, 20 * 1024 * 1024);
+  if (!got) return '';
+  const bytes = got.bytes[0] === 0x1f && got.bytes[1] === 0x8b ? zlib.gunzipSync(got.bytes) : got.bytes;
+  return bytes.toString('utf8');
+}
+
+/** The sitemaps worth reading on a site, for recent articles (remembered for half an hour). */
+const sitemapsOf = origin => cached('sitemaps|' + origin, 30 * 60 * 1000, async () => {
+  let named = [];
+  try {
+    named = onSite.sitemapsInRobots((await getText(origin + '/robots.txt', {}, 256 * 1024)).text);
+  } catch (e) {
+    // no robots.txt
+  }
+  const out = [];
+  for (const url of (named.length ? named : [origin + '/sitemap.xml']).slice(0, 4)) {
+    try {
+      const xml = await readSitemap(url);
+      if (/<sitemapindex/i.test(xml)) out.push(...onSite.pickSitemaps(xml, 2));
+      else if (/<urlset/i.test(xml)) out.push(url);
+    } catch (e) {
+      // try the next
+    }
+    if (out.length >= 3) break;
+  }
+  return out.slice(0, 3);
+});
+
+/** A site's own feeds (remembered for half an hour). */
+const siteFeedsOf = origin => cached('sitefeeds|' + origin, 30 * 60 * 1000, async () => {
+  const page = await getText(origin + '/', {}, 1024 * 1024);
+  const links = feedLinks(page.text, page.url).filter(l => !isCommentsFeed(l)).map(l => l.url);
+  return [...links.slice(0, 3), new URL('/feed/', page.url).href];
+});
+
+/**
+ * An article's address found on its own site from its headline: in its feeds, its WordPress
+ * search feed, or its sitemaps. Null if it isn't there.
+ */
+async function findOnSite(site, title) {
+  const origin = new URL(site).origin;
+  const feeds = await siteFeedsOf(origin).catch(() => []);
+  for (const url of [...new Set(feeds)]) {
+    const feed = await cached('feed|' + url, FEED_CACHE_MS, () => readFeed(url)).catch(() => null);
+    const hit = feed && feed.items.find(i => i.link && onSite.sameHeadline(i.title, title));
+    if (hit) return hit.link;
+  }
+  const search = `${origin}/?s=${encodeURIComponent(title.slice(0, 100))}&feed=rss2`;
+  const found = await readFeed(search).catch(() => null);
+  const hit = found && found.items.find(i => i.link && onSite.sameHeadline(i.title, title));
+  if (hit) return hit.link;
+  for (const url of await sitemapsOf(origin).catch(() => [])) {
+    const address = onSite.findInSitemap(await readSitemap(url).catch(() => ''), title);
+    if (address) return address;
+  }
+  return null;
+}
+
+/**
+ * Where a topic's article is: asked of Google News, or, when Google won't say, looked for on the
+ * article's own site by its headline.
+ */
+async function locate(link, title, site) {
+  try {
+    return await articleAddress(link);
+  } catch (e) {
+    if (!title || !site) throw e;
+    const found = await findOnSite(site, title).catch(() => null);
+    if (found) return found;
+    throw new FetchError(`${e.message}, and ${new URL(site).hostname.replace(/^www\./, '')} doesn’t list it in its feeds or sitemaps`);
+  }
 }
 
 async function readArticle(url) {
@@ -396,10 +475,13 @@ async function handle(req, res) {
   if (u.pathname === '/api/article') {
     const url = webAddress(u);
     if (!url) return json(res, 400, { error: 'Not a web address' });
+    // For a topic's article, its headline and outlet's site, in case Google News won't say where it is.
+    const title = (u.searchParams.get('title') || '').trim().slice(0, 300);
+    const site = /^https?:\/\/[^\s]+$/i.test(u.searchParams.get('site') || '') ? u.searchParams.get('site') : null;
     return api(res, `article ${url}`, async () => {
       // A topic's article: first where its Google News link leads (remembered), then the article.
       const address = isGoogleNewsLink(url)
-        ? await cached('link|' + url, LINK_CACHE_MS, () => articleAddress(url))
+        ? await cached('link|' + url, LINK_CACHE_MS, () => locate(url, title, site))
         : url;
       return cached('article|' + address, ARTICLE_CACHE_MS, () => readArticle(address));
     });

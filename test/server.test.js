@@ -27,6 +27,11 @@ function googleNews(req, res, u) {
         res.writeHead(429);
         return res.end('Too many requests');
       }
+      if (asked.includes('CBMiRedirected')) {
+        // What a server in a data centre may get: sent to a check for unusual traffic.
+        res.writeHead(302, { Location: 'https://www.google.com/sorry/index?continue=x' });
+        return res.end();
+      }
       const ok = asked.includes('SIG-OK') && asked.includes('1764081234');
       res.end(ok ? `)]}'\n\n[["wrb.fr","Fbv4je","[\\"garturlres\\",\\"${siteUrl}/story\\",1]",null,null,null,"generic"],["di",12]]`
         : `)]}'\n\n[["wrb.fr","Fbv4je",null,null,null,[3],"generic"]]`);
@@ -54,7 +59,17 @@ const site = http.createServer((req, res) => {
     return res.end();
   }
   // Asked for as localhost, the site is one without icons.
-  if (req.url === '/' && /^localhost:/.test(req.headers.host)) return res.end('<html><body><p>No icons here.</p></body></html>');
+  if (req.url === '/' && /^localhost:/.test(req.headers.host)) {
+    return res.end('<html><head><link rel="alternate" type="application/rss+xml" href="/local-feed.xml"></head>'
+        + '<body><p>No icons here.</p></body></html>');
+  }
+  // That site's own feed, with a topic's article in it (found by its headline when Google won't say).
+  if (req.url === '/local-feed.xml') {
+    const here = `http://${req.headers.host}`;
+    return res.end(`<?xml version="1.0"?><rss version="2.0"><channel><title>Local news</title><link>${here}/</link>
+      <item><title>Torredembarra s'adhereix a l'Associació per l'Impuls Metropolità</title><link>${here}/story</link></item>
+      </channel></rss>`);
+  }
   if (req.url === '/favicon-32.png') {
     res.writeHead(200, { 'Content-Type': 'application/octet-stream' }); // mislabelled, as sites do
     return res.end(PNG);
@@ -248,11 +263,34 @@ test('when Google News doesn\'t say where an article is, the reader is told so',
   assert.match(body.error, /Google News didn’t say where this article is/);
 });
 
+test('a lookup sent elsewhere (a check for unusual traffic) counts as refused, and says where it went', async () => {
+  const asked = lookups.length;
+  const { status, body } = await api('/api/article', { url: `${siteUrl}/rss/articles/CBMiRedirected_0000000005` });
+  assert.equal(status, 502);
+  assert.match(body.error, /isn’t answering NewsFeed’s lookups just now/);
+  assert.equal(lookups.length, asked + 1);
+});
+
 test('after Google refuses a lookup, lookups pause instead of insisting', async () => {
   const refused = await api('/api/article', { url: `${siteUrl}/rss/articles/CBMiRefused_000000000003` });
-  assert.match(refused.body.error, /isn’t answering lookups just now/);
+  assert.match(refused.body.error, /isn’t answering NewsFeed’s lookups just now/);
   const asked = lookups.length;
   const next = await api('/api/article', { url: `${siteUrl}/rss/articles/CBMiAfterPause_00000004` });
-  assert.match(next.body.error, /isn’t answering lookups just now/);
+  assert.match(next.body.error, /isn’t answering NewsFeed’s lookups just now/);
   assert.equal(lookups.length, asked, 'not asked while paused');
+});
+
+test('when Google News won\'t say, the article is found on its own site by its headline', async () => {
+  const site = `http://localhost:${new URL(siteUrl).port}`;
+  const asked = lookups.length;
+  const found = await api('/api/article', {
+    url: `${siteUrl}/rss/articles/CBMiOnItsSite_00000000007`, site,
+    title: 'Torredembarra s’adhereix a l’Associació per l’Impuls Metropolità',
+  });
+  assert.equal(found.status, 200);
+  assert.equal(found.body.url, site + '/story');
+  assert.equal(lookups.length, asked, 'Google is still left alone');
+  const missing = await api('/api/article', { url: `${siteUrl}/rss/articles/CBMiNotOnSite_00000000008`, title: 'A headline nobody published', site });
+  assert.equal(missing.status, 502);
+  assert.match(missing.body.error, /isn’t answering NewsFeed’s lookups just now, and localhost doesn’t list it in its feeds or sitemaps/);
 });

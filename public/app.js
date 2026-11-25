@@ -803,12 +803,15 @@ async function loadFullText(a) {
   setStatus('loading', isGoogleNews(link) ? 'Finding the article through Google News…' : 'Loading the full article…');
   let result;
   try {
-    result = await getJson(`/api/article?url=${encodeURIComponent(link)}`);
+    // A Google News link comes with its headline and outlet, to find it on the outlet's site
+    // if Google won't say where it leads.
+    const extra = isGoogleNews(link) && a.site ? `&title=${encodeURIComponent(a.title)}&site=${encodeURIComponent(a.site)}` : '';
+    result = await getJson(`/api/article?url=${encodeURIComponent(link)}${extra}`);
   } catch (e) {
     if (selectedKey === a.key) {
       const why = explainFailure(e.message, a.sourceName);
       // Asking again won't change a subscribers-only, blocked or deleted page; a timeout might pass.
-      const final = /HTTP (40[1-4]|410)/.test(e.message);
+      const final = /HTTP (40[1-4]|410)|Google News isn’t answering/.test(e.message);
       if (final) refusals.set(a.key, why);
       setStatus('summary', shownSoFar(a), why);
       readerActions(a, '', undefined, !final);

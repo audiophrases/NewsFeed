@@ -58,7 +58,10 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   Google where it leads (the lookup Google's own article page makes in a browser; not a published
   API, so it may change), then reads the article from its site. It asks only for articles you
   open, one at a time; your browser and the server remember every answer, and after Google
-  refuses a lookup the server leaves it alone for 30 minutes.
+  refuses a lookup (or redirects it, as it may for servers in data centres) the server leaves it
+  alone for 30 minutes. When Google won't say, the article is looked for on its own site by its
+  headline: in the site's feeds, its WordPress search and its sitemaps (this finds some outlets'
+  articles, not those that list them nowhere public).
 - **Edit** – the ✎ next to *Topics* or *Sources* lists everything you follow: type to rename
   (empty gives back the original name), reorder with the arrows or by dragging the handle, remove,
   or open more settings: a feed's flag, language and address; a Google News source's site, edition
