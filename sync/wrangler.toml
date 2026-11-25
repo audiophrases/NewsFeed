@@ -1,0 +1,22 @@
+# NewsFeed sync: a Cloudflare Worker that keeps your sources and topics, read marks and saved
+# articles the same on every device you sign in on. Deploy from this folder: npx wrangler deploy
+# (see the README, "Sync between devices"). NewsFeed's server finds it through SYNC_URL.
+name = "newsfeed-sync"
+main = "worker.mjs"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[vars]
+# PinPlay's Google OAuth client: NewsFeed signs in with PinPlay's Google sign-in. It is public
+# (PinPlay's /api/student/config shows it). Its "Authorized JavaScript origins", in Google Cloud
+# Console, must list every address NewsFeed is opened at.
+GOOGLE_CLIENT_ID = "673678320233-8aacskg99idu0uqnbr181id33gf8fet4.apps.googleusercontent.com"
+
+# One Durable Object per account, with its own SQLite database.
+[[durable_objects.bindings]]
+name = "USERS"
+class_name = "SyncUser"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SyncUser"]

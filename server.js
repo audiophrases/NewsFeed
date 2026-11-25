@@ -38,6 +38,8 @@ const SEARCH_SLOTS = 3;
 const googleNews = () => process.env.GOOGLE_NEWS_URL || 'https://news.google.com/rss/search';
 const feedSearch = () => process.env.FEED_SEARCH_URL || 'https://cloud.feedly.com/v3/search/feeds';
 const googleNewsSite = () => process.env.GOOGLE_NEWS_SITE || 'https://news.google.com';
+/** The sync service (sync/worker.mjs) the page signs in to, if this server has one: SYNC_URL. */
+const syncUrl = () => (/^https?:\/\/[^\s]+$/i.test(process.env.SYNC_URL || '') ? process.env.SYNC_URL.replace(/\/+$/, '') : null);
 /** Where Google News links lead, remembered for a month: an article's address doesn't change. */
 const LINK_CACHE_MS = 30 * 24 * 60 * 60 * 1000;
 /** After Google refuses a lookup, how long to leave it alone. */
@@ -433,6 +435,7 @@ async function handle(req, res) {
 
   if (u.pathname === '/health') return send(res, 200, 'ok', 'text/plain');
   if (u.pathname === '/api/directory') return json(res, 200, DIRECTORY);
+  if (u.pathname === '/api/config') return json(res, 200, { syncUrl: syncUrl() });
 
   if (u.pathname === '/api/feed') {
     const url = webAddress(u);

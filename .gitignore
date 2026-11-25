@@ -1,2 +1,5 @@
 node_modules/
 *.log
+# The sync worker's local secrets and state (wrangler dev)
+.dev.vars
+.wrangler/

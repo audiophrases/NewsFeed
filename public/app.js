@@ -13,6 +13,7 @@ const KEY_READ = 'newsfeed.read';
 const KEY_SAVED = 'newsfeed.saved';
 const KEY_PREFS = 'newsfeed.prefs';
 const KEY_LINKS = 'newsfeed.links';
+const KEY_SYNC = 'newsfeed.sync';
 /** Google News links whose article address is remembered, at most. */
 const LINKS_LIMIT = 3000;
 
@@ -71,7 +72,11 @@ function store(key, value) {
   }
 }
 
-const saveSources = () => store(KEY_SOURCES, sources);
+/** Every change to what you follow comes through here (and goes to your other devices). */
+const saveSources = () => {
+  store(KEY_SOURCES, sources);
+  noteSources();
+};
 const saveRead = () => store(KEY_READ, [...readKeys].slice(-READ_LIMIT));
 const saveSaved = () => store(KEY_SAVED, [...saved.values()]);
 const savePrefs = () => store(KEY_PREFS, prefs);
@@ -158,12 +163,15 @@ async function fetchSource(s) {
 
 /** Fetches sources a few at a time, redrawing as each one arrives. */
 async function refresh(list = sources) {
-  if (!list.length) return;
   const all = list === sources;
+  if (!all && !list.length) return;
   if (all) {
     if (refreshing) return;
     refreshing = true;
     $('refresh').classList.add('spinning');
+    // Your other devices' changes first, so the right sources are fetched (but don't wait long).
+    await Promise.race([syncNow(), new Promise(resolve => setTimeout(resolve, 2000))]);
+    list = sources;
   }
   // An open search is news too: it updates with the rest.
   if (all && webSearch && !sources.some(s => sid(s) === sid(webSearch))) fetchSource(webSearch).then(scheduleRebuild);
@@ -702,6 +710,7 @@ function select(key, { scroll = false } = {}) {
   selectedKey = key;
   if (!readKeys.has(key)) {
     readKeys.add(key);
+    noteRead(key, true);
     saveRead();
   }
   for (const li of $('articles').children) {
@@ -949,6 +958,7 @@ function toggleRead() {
   if (!selectedKey) return;
   if (readKeys.has(selectedKey)) readKeys.delete(selectedKey);
   else readKeys.add(selectedKey);
+  noteRead(selectedKey, readKeys.has(selectedKey));
   saveRead();
   render();
 }
@@ -963,6 +973,7 @@ function toggleSave(key = selectedKey) {
     saved.set(key, { ...a, savedAt: Date.now() });
     toast('Saved');
   }
+  noteSaved(key, saved.get(key));
   saveSaved();
   render();
 }
@@ -970,7 +981,10 @@ function toggleSave(key = selectedKey) {
 function markAllRead() {
   const list = visible.filter(a => !readKeys.has(a.key));
   if (!list.length) return toast('Nothing unread here');
-  for (const a of list) readKeys.add(a.key);
+  for (const a of list) {
+    readKeys.add(a.key);
+    noteRead(a.key, true);
+  }
   saveRead();
   render();
   toast(`Marked ${list.length} as read`);
@@ -1799,6 +1813,288 @@ function exportSources() {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+// ---- sync between devices -----------------------------------------------------------------
+//
+// Signed in (with PinPlay's Google sign-in), what you follow, what you've read and what you've
+// saved are the same on every device: each change goes to NewsFeed's sync service (sync/worker.mjs,
+// at the server's SYNC_URL) a moment after it's made, and the other devices' changes come back
+// with every refresh, when NewsFeed comes back into view and every few minutes. The latest change
+// of a read mark or saved article wins; the source list, which two devices may both edit, is
+// merged (organize.js). Not signed in, nothing leaves this browser.
+
+const SYNC_EVERY_MS = 5 * 60 * 1000;
+/** The sync service's address; null when this server has none (then there's no sign-in). */
+let syncUrl = null;
+/**
+ * While signed in: { token, email, name, expiresAt, since: the account version this device has,
+ * base: the account's source list as this device last had it, sourcesV: that list's version }.
+ */
+let account = null;
+/** Changes not sent yet. full: everything this device has goes, and all the account's comes back. */
+const noChanges = () => ({ sources: 0, read: {}, saved: {}, full: false });
+let pending = noChanges();
+let syncing = false;
+let syncAgain = false;
+let syncTimer = null;
+let syncError = '';
+let lastSync = 0;
+
+const saveSync = () => store(KEY_SYNC, account ? { account, pending } : null);
+const hasChanges = p => Boolean(p.sources || p.full || Object.keys(p.read).length || Object.keys(p.saved).length);
+
+function noteRead(key, isRead) {
+  if (!account) return;
+  pending.read[key] = [isRead ? 1 : 0, Date.now()];
+  scheduleSync();
+}
+
+function noteSaved(key, article) {
+  if (!account) return;
+  pending.saved[key] = [article || null, Date.now()];
+  scheduleSync();
+}
+
+function noteSources() {
+  if (!account) return;
+  pending.sources = Date.now();
+  scheduleSync();
+}
+
+/** Sends a moment later, so a burst of changes (marking all read) goes in one request. */
+function scheduleSync(ms = 1500) {
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => syncNow(), ms);
+}
+
+/**
+ * On signing in: everything here joins the account. Read marks and saved articles the account
+ * has a later change of keep it; the sources merge with the account's (from nothing in common).
+ */
+function queueEverything() {
+  for (const key of readKeys) pending.read[key] ||= [1, 1];
+  for (const [key, a] of saved) pending.saved[key] ||= [a, a.savedAt || 1];
+  pending.sources = Date.now();
+  pending.full = true;
+  account.base = [];
+  account.sourcesV = 0;
+}
+
+/** Sends this device's changes and takes the account's; one request at a time. */
+async function syncNow({ keepalive = false } = {}) {
+  clearTimeout(syncTimer);
+  if (!account || !syncUrl) return;
+  if (syncing) {
+    syncAgain = true;
+    return;
+  }
+  syncing = true;
+  const sent = pending;
+  pending = noChanges();
+  const since = sent.full ? 0 : account.since || 0;
+  // A copy: the list may change (in place) while this is on its way.
+  const list = sent.sources ? JSON.parse(JSON.stringify(sources)) : null;
+  renderSyncButton();
+  try {
+    const res = await fetch(syncUrl + '/sync', {
+      method: 'POST',
+      keepalive,
+      headers: { Authorization: 'Bearer ' + account.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        since,
+        sources: list ? { list, base: account.sourcesV || 0 } : undefined,
+        read: Object.entries(sent.read).map(([key, [state, at]]) => [key, state, at]),
+        saved: Object.entries(sent.saved).map(([key, [article, at]]) => [key, article, at]),
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401) return signOut(data.error || 'Sign in again to keep syncing');
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    applySync(data, since, list);
+    syncError = '';
+    lastSync = Date.now();
+  } catch (e) {
+    // Sent again next time, unless changed here since.
+    pending = { sources: pending.sources || sent.sources, read: { ...sent.read, ...pending.read },
+      saved: { ...sent.saved, ...pending.saved }, full: pending.full || sent.full };
+    syncError = e.message === 'Failed to fetch' ? 'no connection' : e.message;
+  } finally {
+    syncing = false;
+    saveSync();
+    renderSyncButton();
+    if (syncAgain) {
+      syncAgain = false;
+      scheduleSync(100);
+    }
+  }
+}
+
+/**
+ * Takes the account's changes, except where this device changed something since it asked. The
+ * source list it sent (list) is the account's now, or was refused: then the account's comes back
+ * and this device's changes (since the list both had, account.base) merge into it, to go again.
+ */
+function applySync(data, since, list) {
+  if (data.sources) {
+    const theirs = cleanSources(data.sources.list);
+    const mine = list || pending.sources ? sources : null; // changed here, not in the account
+    const merged = mine ? mergeLists(account.base || [], mine, theirs.list, sid) : theirs.list;
+    account.base = theirs.list;
+    account.sourcesV = data.sources.v;
+    useSources(merged);
+    if (theirs.changed || JSON.stringify(merged) !== JSON.stringify(data.sources.list)) {
+      noteSources();
+      scheduleSync(50); // merged: straight back, before another device changes it again
+    }
+  } else if (list) {
+    account.base = list;
+    account.sourcesV = data.sourcesVersion;
+  }
+  let read = false, kept = false;
+  for (const [key, state] of data.read || []) {
+    if (pending.read[key]) continue;
+    if (state) readKeys.add(key);
+    else readKeys.delete(key);
+    read = true;
+  }
+  for (const [key, article] of data.saved || []) {
+    if (pending.saved[key]) continue;
+    if (article && article.key === key) saved.set(key, article);
+    else saved.delete(key);
+    kept = true;
+  }
+  if (read) saveRead();
+  if (kept) saveSaved();
+  account.since = data.version;
+  // The account doesn't know what this device had (it was reset): everything here goes again.
+  if (data.full && since > 0) {
+    queueEverything();
+    scheduleSync();
+  }
+  if (read || kept) render();
+}
+
+/** The source list from the account: kept here, and new sources fetched. */
+function useSources(list) {
+  const before = new Set(sources.map(sid));
+  sources = list;
+  store(KEY_SOURCES, sources);
+  const [kind, id] = splitView(prefs.view);
+  if ((kind === 'source' || kind === 'topic') && !sources.some(s => sid(s) === id)) prefs.view = 'all';
+  const added = sources.filter(s => !before.has(sid(s)) && !loaded.has(sid(s)));
+  // During a refresh, the refresh fetches them.
+  if (added.length && !refreshing) refresh(added);
+  else rebuild();
+}
+
+function signOut(message) {
+  account = null;
+  pending = noChanges();
+  syncError = '';
+  saveSync();
+  renderSyncButton();
+  if (addMode === 'sync' && $('add-dialog').open) showSync();
+  try {
+    google.accounts.id.disableAutoSelect();
+  } catch (e) {
+    // Google's script isn't loaded: nothing to forget.
+  }
+  if (message) toast(message);
+}
+
+function renderSyncButton() {
+  const b = $('sync');
+  b.hidden = !syncUrl;
+  b.textContent = !account ? 'Sync' : syncing ? 'Syncing…' : syncError ? 'Sync ⚠' : 'Synced';
+  b.title = !account ? 'Keep what you follow, read and save the same on all your devices'
+    : syncError ? `Couldn’t sync: ${syncError}` : `Signed in as ${account.email}`;
+}
+
+/** The sync dialog: Google's sign-in button, or who is signed in and how syncing goes. */
+function showSync() {
+  addMode = 'sync';
+  setStep(account ? 'Sync between devices' : 'Sync your devices', null, false);
+  const body = [];
+  if (account) {
+    const who = account.name ? `${account.name} (${account.email})` : account.email;
+    body.push(el('p', 'help', `Signed in as ${who}. What you follow, what you’ve read and what you’ve saved `
+        + 'are the same on every device you sign in on.'),
+    el('p', 'help', syncing ? 'Syncing…' : syncError ? `Couldn’t sync: ${syncError}. NewsFeed tries again by itself.`
+      : lastSync ? `Synced ${age(lastSync)}.` : ''));
+    const actions = el('div', 'sync-actions');
+    actions.append(button('primary subtle', 'Sync now', async () => {
+      await syncNow();
+      if (addMode === 'sync' && $('add-dialog').open) showSync();
+    }), button('primary-text', 'Sign out', () => signOut()));
+    body.push(actions);
+  } else {
+    const box = el('div', 'google-button');
+    const status = el('p', 'help');
+    status.id = 'sync-status';
+    body.push(el('p', 'help', 'Sign in with Google on each of your devices to keep what you follow, what you’ve read '
+        + 'and what you’ve saved the same on all of them. What this device has joins your account.'),
+    box, status, el('p', 'help small', 'NewsFeed uses PinPlay’s Google sign-in, so Google shows PinPlay’s name. '
+        + `If Google says the origin isn’t allowed, ${location.origin} has to be added to that sign-in’s sites first.`));
+    renderGoogleButton(box);
+  }
+  $('add-body').replaceChildren(...body);
+  if (!$('add-dialog').open) $('add-dialog').showModal();
+  closeDrawer();
+}
+
+const syncStatus = text => {
+  if ($('sync-status')) $('sync-status').textContent = text;
+};
+
+let googleScript = null;
+
+function loadGoogleScript() {
+  googleScript ||= new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.async = true;
+    s.onload = resolve;
+    s.onerror = () => {
+      googleScript = null;
+      reject(new Error('check your connection'));
+    };
+    document.head.append(s);
+  });
+  return googleScript;
+}
+
+/** Google's sign-in button, for the sync service's Google client (PinPlay's). */
+async function renderGoogleButton(box) {
+  try {
+    const [config] = await Promise.all([getJson(syncUrl + '/config'), loadGoogleScript()]);
+    if (!config.ready) return syncStatus('Sync isn’t set up on this server yet.');
+    google.accounts.id.initialize({ client_id: config.googleClientId, callback: r => signIn(r.credential) });
+    google.accounts.id.renderButton(box, { theme: 'filled_blue', size: 'large', text: 'signin_with', shape: 'pill' });
+  } catch (e) {
+    syncStatus(`Google sign-in couldn’t load: ${e.message}`);
+  }
+}
+
+/** Google said who you are: the sync service checks it and signs this device in. */
+async function signIn(credential) {
+  syncStatus('Signing in…');
+  try {
+    const res = await fetch(syncUrl + '/login', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ googleIdToken: credential }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    account = { token: data.token, email: data.email, name: data.name, expiresAt: data.expiresAt, since: 0, base: [], sourcesV: 0 };
+    pending = noChanges();
+    queueEverything();
+    saveSync();
+    await syncNow();
+    if (addMode === 'sync' && $('add-dialog').open) showSync();
+    toast(syncError ? `Signed in, but couldn’t sync yet: ${syncError}` : `Synced with ${data.email}`);
+  } catch (e) {
+    syncStatus(`Couldn’t sign in: ${e.message}`);
+  }
+}
+
 /** NewsFeed's own export, or OPML from another feed reader. */
 async function importFile(file) {
   const text = await file.text();
@@ -1822,7 +2118,11 @@ async function importFile(file) {
     fresh.push(entry);
     added++;
   }
-  for (const a of savedList) if (!saved.has(a.key)) saved.set(a.key, a);
+  for (const a of savedList) {
+    if (saved.has(a.key)) continue;
+    saved.set(a.key, a);
+    noteSaved(a.key, a);
+  }
   saveSources();
   saveSaved();
   toast(`Imported ${added} ${added === 1 ? 'source' : 'sources'}${savedList.length ? ` and ${savedList.length} saved` : ''}`);
@@ -1964,10 +2264,11 @@ function onKey(e) {
 }
 
 /**
- * Stored sources, checked; a built-in feed that has been replaced (the directory entry says which
- * address it replaces, as The Guardian's, which refuses NewsFeed) becomes its replacement.
+ * Sources as stored here or by another device, checked: { list, changed }. A built-in feed that
+ * has been replaced (the directory entry says which address it replaces, as The Guardian's, which
+ * refuses NewsFeed) becomes its replacement.
  */
-function upgradeSources(stored, replaced = new Map()) {
+function cleanSources(stored, replaced = new Map()) {
   const out = [];
   let changed = false;
   for (const s of Array.isArray(stored) ? stored : []) {
@@ -1977,8 +2278,7 @@ function upgradeSources(stored, replaced = new Map()) {
     if (replacement && entry) replaced.set(sid(s), sid(entry));
     if (entry && !out.some(x => sid(x) === sid(entry))) out.push(entry);
   }
-  if (changed) store(KEY_SOURCES, out);
-  return out;
+  return { list: out, changed };
 }
 
 /** The saved view, moved to a replaced source's replacement; "all" if its source is gone. */
@@ -1990,13 +2290,25 @@ function upgradeView(view, replaced) {
 }
 
 async function start() {
+  const config = getJson('/api/config').catch(() => ({}));
   try {
     directory = await getJson('/api/directory');
   } catch (e) {
     toast('Could not reach the NewsFeed server');
   }
+  syncUrl = (await config).syncUrl || null;
+  const kept = load(KEY_SYNC, null);
+  if (kept && kept.account && kept.account.token && !(kept.account.expiresAt < Date.now())) {
+    account = kept.account;
+    pending = { ...noChanges(), ...kept.pending };
+  } else if (kept && kept.account) {
+    store(KEY_SYNC, null);
+    if (syncUrl) toast('Your sync sign-in has expired: sign in again to keep syncing');
+  }
   const replaced = new Map();
-  sources = upgradeSources(load(KEY_SOURCES, []), replaced);
+  const clean = cleanSources(load(KEY_SOURCES, []), replaced);
+  sources = clean.list;
+  if (clean.changed) store(KEY_SOURCES, sources);
   readKeys = new Set(load(KEY_READ, []));
   knownLinks = new Map(load(KEY_LINKS, []).filter(e => Array.isArray(e) && e.length === 2));
   saved = new Map(load(KEY_SAVED, []).filter(a => a && a.key).map(a => [a.key, a]));
@@ -2043,12 +2355,24 @@ async function start() {
     }
   });
   document.addEventListener('keydown', onKey);
+  $('sync').addEventListener('click', showSync);
+  // Leaving (another app, a closed tab): changes not sent yet go now; back: the others' come.
+  const flush = () => {
+    if (!account || !hasChanges(pending)) return;
+    saveSync();
+    syncNow({ keepalive: true });
+  };
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible' && Date.now() - lastRefresh > AUTO_REFRESH_MS) refresh();
+    if (document.visibilityState === 'hidden') flush();
+    else if (Date.now() - lastRefresh > AUTO_REFRESH_MS) refresh();
+    else syncNow();
   });
+  window.addEventListener('pagehide', flush);
   setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, AUTO_REFRESH_MS);
+  setInterval(() => { if (document.visibilityState === 'visible') syncNow(); }, SYNC_EVERY_MS);
 
   render();
+  renderSyncButton();
   refresh();
 }
 

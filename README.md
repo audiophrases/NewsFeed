@@ -92,14 +92,50 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   `f` full text, `/` search, `r` refresh.
 - **Export / Import** – your sources, topics and saved articles as JSON; OPML from other feed
   readers can be imported too.
+- **Sync** – sign in with Google (PinPlay's sign-in) on each of your devices, and what you follow,
+  what you've read (and marked unread) and what you've saved stay the same on all of them. Each
+  change goes a moment after you make it; the others' changes come with every refresh, when
+  NewsFeed comes back into view and every 5 minutes. Made offline, a change waits for the
+  connection. When you sign in, what that device has joins your account. For a read mark or a
+  saved article, the latest change wins. When two devices changed your sources, both sets of
+  changes are kept: sources added on either device stay, and a source removed on either goes.
+  Only on a NewsFeed set up for it (see below).
 
-Your sources, read marks, saved articles and settings are stored in the browser (per device).
+Your sources, read marks, saved articles and settings are stored in the browser (per device), and
+in your sync account if you sign in.
+
+## Sync between devices
+
+Sync is a small Cloudflare Worker in [`sync/`](sync/) (free plan). It uses PinPlay's Google OAuth
+client for sign-in, but not PinPlay itself or its student roster: the worker checks Google's token
+itself, issues its own sign-in (180 days) and keeps each account's data in a Durable Object of its
+own. To set it up:
+
+1. **Deploy the worker** (once; again after changing `sync/`):
+
+   ```sh
+   cd sync
+   npx wrangler deploy                       # prints https://newsfeed-sync.<you>.workers.dev
+   npx wrangler secret put SESSION_KEY       # a long random value: openssl rand -hex 32
+   npx wrangler secret put ALLOWED_EMAILS    # optional: who may sync, e.g. you@gmail.com
+   ```
+
+   Without `ALLOWED_EMAILS` any Google account can sign in and sync its own data. Removing an
+   address from it signs that account out everywhere.
+2. **Tell NewsFeed where it is**: set `SYNC_URL` to the worker's address, on Render under the
+   service's *Environment*, or before `node server.js` locally. Without it there's no sign-in.
+3. **Let NewsFeed use the Google sign-in**: in Google Cloud Console, *APIs & Services ➜
+   Credentials*, open PinPlay's OAuth client and add each address NewsFeed is opened at to
+   *Authorized JavaScript origins* (your `https://newsfeed-….onrender.com`, and
+   `http://localhost` and `http://localhost:8091` for this PC). Google offers sign-in only on
+   those. A phone on your Wi-Fi (`http://192.168.…`) can't be added, so sign in there through Render.
 
 ## API (used by the page)
 
 | Endpoint | |
 | --- | --- |
 | `GET /api/directory` | built-in sources (`sources.json`) |
+| `GET /api/config` | the sync service's address (`SYNC_URL`), or null |
 | `GET /api/feed?url=` | a feed's articles |
 | `GET /api/search?q=&editions=ca-ES,en-US` | news about a topic, in one or more editions (up to 5; or `lang=&country=`) |
 | `GET /api/sources?q=&lang=&country=` | outlets and working feeds for a name |
@@ -117,4 +153,5 @@ npm test
 ```
 
 Parsing (RSS, RDF, Atom, Google News, ISO-8859-1), feed discovery, article extraction and the
-server end to end against a local fixture site.
+server end to end against a local fixture site; the sync worker's sign-in and syncing against real
+SQLite (Node's `node:sqlite`), and merging two devices' source lists.

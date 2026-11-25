@@ -126,6 +126,21 @@ const api = async (p, q) => {
   return { status: res.status, body: await res.json() };
 };
 
+test('config: the sync service, when this server has one', async () => {
+  const was = process.env.SYNC_URL;
+  try {
+    delete process.env.SYNC_URL;
+    assert.deepEqual((await api('/api/config', {})).body, { syncUrl: null });
+    process.env.SYNC_URL = 'https://newsfeed-sync.example.workers.dev/';
+    assert.deepEqual((await api('/api/config', {})).body, { syncUrl: 'https://newsfeed-sync.example.workers.dev' });
+    process.env.SYNC_URL = 'javascript:alert(1)';
+    assert.deepEqual((await api('/api/config', {})).body, { syncUrl: null });
+  } finally {
+    if (was === undefined) delete process.env.SYNC_URL;
+    else process.env.SYNC_URL = was;
+  }
+});
+
 test('directory', async () => {
   const { status, body } = await api('/api/directory', {});
   assert.equal(status, 200);
