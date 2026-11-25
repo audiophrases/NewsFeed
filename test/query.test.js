@@ -4,7 +4,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { parseQuery, matches, score } = require('../public/query');
+const { parseQuery, matches, score, storyTitle, combineSearch } = require('../public/query');
 
 const article = (title, summary = '') => ({ title, summary, author: null, sourceName: 'Example', categories: [] });
 
@@ -36,6 +36,22 @@ test('OR binds only its neighbours; AND and a stray OR are ignored', () => {
 test('accents and case are ignored; search operators are left to the news search', () => {
   assert.ok(matches(article('El Barça guanya'), parseQuery('barca')));
   assert.deepEqual(parseQuery('site:beteve.cat when:7d').include, []);
+});
+
+test('long headlines alike are one story, whatever their case, accents and punctuation', () => {
+  assert.equal(storyTitle('Barça signs a new striker — for €60m!'), storyTitle('barca signs a new striker: for 60m'));
+  assert.equal(storyTitle('Live: Weather'), null, 'short ones are too common to tell');
+});
+
+test('a search of your news and all news lists each story once, yours first', () => {
+  const mine = { key: 'example.com/climate-fund', title: 'Climate summit agrees on a new fund' };
+  const sameLink = { key: 'example.com/climate-fund', title: 'Climate summit: the fund explained' };
+  const sameHeadline = { key: 'news.google.com/rss/articles/cbmi1', title: 'Climate summit agrees on a NEW fund' };
+  const short1 = { key: 'a.example/live', title: 'Live: climate' };
+  const short2 = { key: 'b.example/live', title: 'Live: climate' };
+  const found = [sameLink, sameHeadline, short1, short2, short1];
+  assert.deepEqual(combineSearch([mine], found), [mine, short1, short2]);
+  assert.deepEqual(combineSearch([], [sameHeadline, mine]), [sameHeadline], 'nothing of yours: the search alone');
 });
 
 test('best match counts title words more', () => {

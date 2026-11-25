@@ -41,11 +41,12 @@ const byKey = new Map();
 let readKeys = new Set();
 /** Saved articles by key, kept whole so they outlive the feeds. */
 let saved = new Map();
-let prefs = { view: 'all', sort: 'newest', since: 0, unreadOnly: false, langs: [], fullText: true };
+/** searchAlso: the languages searches use besides the browser's (as a topic's other languages). */
+let prefs = { view: 'all', sort: 'newest', since: 0, unreadOnly: false, langs: [], fullText: true, searchAlso: [] };
 let shown = PAGE;
 let visible = [];
 let selectedKey = null;
-/** A news search that isn't followed (yet): the "Search all news" view. */
+/** The search view's news search (a topic that isn't followed, unless you follow it). */
 let webSearch = null;
 let refreshing = false;
 let lastRefresh = 0;
@@ -164,6 +165,8 @@ async function refresh(list = sources) {
     refreshing = true;
     $('refresh').classList.add('spinning');
   }
+  // An open search is news too: it updates with the rest.
+  if (all && webSearch && !sources.some(s => sid(s) === sid(webSearch))) fetchSource(webSearch).then(scheduleRebuild);
   let done = 0;
   const queue = list.slice();
   const progress = () => {
@@ -219,8 +222,6 @@ function linkKey(link) {
   }
 }
 
-const titleKey = t => fold(t).replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-
 let rebuildTimer = null;
 
 function scheduleRebuild() {
@@ -248,8 +249,8 @@ function rebuild() {
       if (s.kind === 'news' && item.title.split(/\s+/).length < 3) continue;
       const link = item.link ? realLink(item.link) : null;
       const key = (link && linkKey(link)) || `${id}|${item.id}`;
-      const tk = titleKey(item.title);
-      const twin = byKey.get(key) || (tk.length > 24 ? byTitle.get(tk) : null);
+      const tk = storyTitle(item.title);
+      const twin = byKey.get(key) || (tk && byTitle.get(tk));
       if (twin) {
         if (!twin.sids.includes(id)) twin.sids.push(id);
         continue;
@@ -263,7 +264,7 @@ function rebuild() {
       };
       articles.push(a);
       byKey.set(key, a);
-      if (tk.length > 24) byTitle.set(tk, a);
+      if (tk) byTitle.set(tk, a);
       // A saved copy picks up a newer image or summary.
       if (saved.has(key)) saved.set(key, { ...a, savedAt: saved.get(key).savedAt });
     }
@@ -271,7 +272,7 @@ function rebuild() {
   render();
 }
 
-/** Articles of the web-search view: one search, nothing merged. */
+/** What a news search of all outlets found; the ones already in your news are your articles. */
 function webArticles() {
   const got = webSearch && loaded.get(sid(webSearch));
   if (!got) return [];
@@ -287,6 +288,13 @@ function webArticles() {
   });
 }
 
+/** The search view: your articles that match its words, and what the news search found besides. */
+function searchArticles() {
+  if (!webSearch) return [];
+  const query = parseQuery(webSearch.q);
+  return combineSearch(query.include.length ? articles.filter(a => matches(a, query)) : [], webArticles());
+}
+
 const articleByKey = key => byKey.get(key) || saved.get(key) || webArticles().find(a => a.key === key) || null;
 
 // ---- search and filters ------------------------------------------------------------------
@@ -297,7 +305,7 @@ const articleByKey = key => byKey.get(key) || saved.get(key) || webArticles().fi
 function viewArticles() {
   const [kind, id] = splitView(prefs.view);
   if (kind === 'saved') return [...saved.values()].sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
-  if (kind === 'web') return webArticles();
+  if (kind === 'web') return searchArticles();
   if (kind === 'source') return articles.filter(a => a.sids.includes(id));
   if (kind === 'topic') {
     const topic = sourceById(id);
@@ -315,21 +323,24 @@ function splitView(view) {
 
 function applyFilters(list) {
   const kind = splitView(prefs.view)[0];
+  // A search's words chose its articles already (the news search's matched in their text too);
+  // they still rank them for "Best match".
   const query = kind === 'web' ? parseQuery('') : parseQuery($('q').value);
+  const ranking = kind === 'web' && webSearch ? parseQuery(webSearch.q) : query;
   const since = prefs.since ? Date.now() - prefs.since * 3600 * 1000 : 0;
   const langs = new Set(prefs.langs);
   let out = list.filter(a => (!since || a.publishedAt >= since)
       && (!prefs.unreadOnly || kind === 'unread' || !readKeys.has(a.key) || a.key === selectedKey)
       && (!langs.size || langs.has(a.lang || '?'))
       && matches(a, query));
-  const sort = prefs.sort === 'relevance' && !query.include.length ? 'newest' : prefs.sort;
+  const sort = prefs.sort === 'relevance' && !ranking.include.length ? 'newest' : prefs.sort;
   if (kind === 'saved' && sort === 'newest' && prefs.sort === 'newest') return out; // by when saved
   const newest = (a, b) => b.publishedAt - a.publishedAt;
   if (sort === 'newest') out.sort(newest);
   else if (sort === 'oldest') out.sort((a, b) => (a.publishedAt || Infinity) - (b.publishedAt || Infinity));
   else if (sort === 'source') out.sort((a, b) => a.sourceName.localeCompare(b.sourceName) || newest(a, b));
   else if (sort === 'relevance') {
-    const scores = new Map(out.map(a => [a, score(a, query)]));
+    const scores = new Map(out.map(a => [a, score(a, ranking)]));
     out.sort((a, b) => scores.get(b) - scores.get(a) || newest(a, b));
   }
   return out;
@@ -347,7 +358,7 @@ function viewTitle() {
   const [kind, id] = splitView(prefs.view);
   if (kind === 'unread') return 'Unread';
   if (kind === 'saved') return 'Saved';
-  if (kind === 'web') return webSearch ? `News about “${webSearch.q}”` : 'News search';
+  if (kind === 'web') return webSearch ? `Search: “${webSearch.q}”` : 'Search';
   if (kind === 'source' || kind === 'topic') return sourceById(id)?.name || 'All articles';
   return 'All articles';
 }
@@ -430,9 +441,9 @@ function renderList() {
   $('sort').value = prefs.sort;
   $('since').value = String(prefs.since);
   $('unread-only').setAttribute('aria-checked', String(prefs.unreadOnly));
-  renderWebSearchBar();
+  renderWebSearchBar(base);
 
-  const query = parseQuery(splitView(prefs.view)[0] === 'web' ? '' : $('q').value);
+  const query = parseQuery(viewKind === 'web' && webSearch ? webSearch.q : $('q').value);
   $('articles').replaceChildren(...visible.slice(0, shown).map(a => articleRow(a, query)));
   $('more').hidden = visible.length <= shown;
   $('more').textContent = `Show more (${visible.length - shown})`;
@@ -473,22 +484,63 @@ function languageName(code) {
   return code;
 }
 
-function renderWebSearchBar() {
+/**
+ * Under the toolbar while searching: typing shows matches in your news, with the search of all
+ * news too one press away; that search's view says where its articles come from.
+ */
+function renderWebSearchBar(base) {
   const bar = $('web-search');
   const q = $('q').value.trim();
   const kind = splitView(prefs.view)[0];
   if (kind === 'web' && webSearch) {
-    const following = sources.some(s => sid(s) === sid(webSearch));
-    bar.replaceChildren(el('span', '', following ? 'You follow this topic.' : 'Results from a news search across all outlets.'));
-    if (!following) bar.append(button('primary-text', 'Follow this topic', () => follow(webSearch)));
+    searchBar(bar, base);
     bar.hidden = false;
   } else if (q && kind !== 'saved' && parseQuery(q).include.length) {
-    bar.replaceChildren(el('span', '', `Looking beyond your sources?`),
-        button('primary-text', `Search all news for “${q}”`, () => runWebSearch(q)));
+    const all = button('primary-text', 'Search all news too', () => runWebSearch(q));
+    all.title = 'Your news and a news search of every outlet, in one list (or press Enter)';
+    bar.replaceChildren(el('span', '', 'Showing matches in your news.'), all);
     bar.hidden = false;
   } else {
     bar.hidden = true;
   }
+}
+
+/** The search's bar: how many articles are yours and how many more it found, its languages, follow. */
+function searchBar(bar, base) {
+  const got = loaded.get(sid(webSearch));
+  const own = base.filter(a => byKey.has(a.key)).length;
+  const yours = own ? `${own} in your news` : 'None in your news';
+  const following = sources.some(s => sid(s) === sid(webSearch));
+  const text = following ? `${yours}. You follow this topic.`
+      : !got ? `${yours}. Searching all news…`
+      : got.error && !got.items.length ? `${yours}. The search of all news failed: ${got.error}`
+      : `${yours} · ${base.length - own} more from all news`;
+  bar.replaceChildren(el('span', '', text));
+  if (!following) {
+    const keep = button('primary-text', 'Follow as a topic', () => follow(webSearch));
+    keep.title = 'Keep this search in Topics, updated with the rest of your news';
+    bar.append(keep);
+  }
+  const editions = topicEditions(webSearch);
+  const main = editions[0].split('-')[0];
+  const also = new Set(editions.slice(1).map(e => e.split('-')[0]));
+  const langs = el('div', 'also');
+  langs.append(el('span', '', `Besides ${languageName(main)}, also search in:`),
+      ...EDITION_LANGS.filter(([lang]) => lang !== main).map(([lang, name]) => {
+        const b = el('button', 'chip small', name);
+        b.type = 'button';
+        b.setAttribute('aria-pressed', String(also.has(lang)));
+        b.addEventListener('click', () => {
+          if (also.has(lang)) also.delete(lang);
+          else if (also.size + 1 >= MAX_EDITIONS) return toast(`Up to ${MAX_EDITIONS} languages per search`);
+          else also.add(lang);
+          prefs.searchAlso = [...also];
+          savePrefs();
+          runWebSearch(webSearch.q);
+        });
+        return b;
+      }));
+  bar.append(langs);
 }
 
 function button(kind, text, onClick) {
@@ -588,7 +640,8 @@ function renderEmpty(base) {
     } else if (got && got.error && /HTTP 4(04|10)/.test(got.error)) {
       empty.append(el('p', '', `The feed is no longer at this address (${got.error}). Search for the source again to find its new feed.`));
     } else {
-      empty.append(el('p', '', got && got.error ? `Could not load: ${got.error}` : kind === 'unread' ? 'All caught up.' : 'No articles yet.'));
+      empty.append(el('p', '', got && got.error ? `Could not load: ${got.error}` : kind === 'unread' ? 'All caught up.'
+          : kind === 'web' ? 'Nothing found, in your news or in all news.' : 'No articles yet.'));
     }
   }
 }
@@ -606,6 +659,10 @@ function clearFilters() {
 // ---- views -------------------------------------------------------------------------------
 
 function setView(view) {
+  // The search box shows a search's words while its view is open, and only then.
+  const box = $('q');
+  if (webSearch && prefs.view === 'web' && view !== 'web' && box.value.trim() === webSearch.q) box.value = '';
+  if (webSearch && view === 'web') box.value = webSearch.q;
   prefs.view = view;
   savePrefs();
   shown = PAGE;
@@ -614,13 +671,25 @@ function setView(view) {
   render();
 }
 
+/**
+ * Searches your news and all news for these words, in one view: a news search like a topic's (in
+ * the languages last picked for searches), not followed unless you choose to.
+ */
 async function runWebSearch(q) {
-  const [lang, country] = defaultEdition().split('-');
-  webSearch = { kind: 'topic', q, lang, country, name: q };
-  $('q').value = '';
+  const old = webSearch;
+  webSearch = topicEntry({ q, editions: searchEditions() });
+  if (old && sid(old) !== sid(webSearch) && !sources.some(s => sid(s) === sid(old))) loaded.delete(sid(old));
+  $('q').blur();
   setView('web');
   await fetchSource(webSearch);
   render();
+}
+
+/** A search's editions: the browser's own, then the other languages last picked for searches. */
+function searchEditions() {
+  const main = defaultEdition();
+  const country = main.split('-')[1];
+  return cleanEditions([main, ...prefs.searchAlso.map(lang => editionFor(lang, country))]);
 }
 
 // ---- reader ------------------------------------------------------------------------------
@@ -931,6 +1000,8 @@ async function follow(s, { quiet = false, fetchNow = true } = {}) {
   saveSources();
   if (webSearch && sid(webSearch) === sid(entry)) {
     webSearch = null;
+    // The topic shows everything its search finds: its words in the box would hide some.
+    if ($('q').value.trim() === entry.q) $('q').value = '';
     prefs.view = 'topic:' + sid(entry);
     savePrefs();
   }
@@ -1855,10 +1926,19 @@ let queryTimer;
 function onQuery() {
   clearTimeout(queryTimer);
   queryTimer = setTimeout(() => {
-    if (splitView(prefs.view)[0] === 'web' && $('q').value.trim()) prefs.view = 'all';
+    const q = $('q').value.trim();
+    // Other words while a search is open: back to your news, filtered as you type (Enter searches).
+    if (splitView(prefs.view)[0] === 'web' && q && q !== webSearch?.q) return setView('all');
     shown = PAGE;
     renderList();
   }, 120);
+}
+
+/** Enter in the search box searches all news too, with your news, in one list. */
+function onQueryKey(e) {
+  if (e.key !== 'Enter' || e.isComposing) return;
+  const q = $('q').value.trim();
+  if (parseQuery(q).include.length) runWebSearch(q);
 }
 
 function onKey(e) {
@@ -1922,10 +2002,12 @@ async function start() {
   saved = new Map(load(KEY_SAVED, []).filter(a => a && a.key).map(a => [a.key, a]));
   prefs = { ...prefs, ...load(KEY_PREFS, {}) };
   if (!Array.isArray(prefs.langs)) prefs.langs = [];
+  if (!Array.isArray(prefs.searchAlso)) prefs.searchAlso = [];
   if (prefs.view === 'web') prefs.view = 'all';
   prefs.view = upgradeView(prefs.view, replaced);
 
   $('q').addEventListener('input', onQuery);
+  $('q').addEventListener('keydown', onQueryKey);
   $('sort').addEventListener('change', () => { prefs.sort = $('sort').value; savePrefs(); renderList(); });
   $('since').addEventListener('change', () => { prefs.since = Number($('since').value); savePrefs(); shown = PAGE; renderList(); });
   $('unread-only').addEventListener('click', () => { prefs.unreadOnly = !prefs.unreadOnly; savePrefs(); shown = PAGE; renderList(); });

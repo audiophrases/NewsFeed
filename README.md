@@ -67,11 +67,14 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   or open more settings: a feed's flag, language and address; a Google News source's site, edition
   and flag; a topic's words, edition and other languages. The ✎ next to a source's or topic's
   title opens its settings directly.
-- **Search** – searches everything loaded (titles, summaries, authors, sources, categories),
-  accent-insensitive, with `"exact phrases"`, `-excluded` words and `OR` between alternatives;
-  matches are highlighted.
-  "Search all news" runs the same words as a news search beyond your sources, which you can
-  then follow as a topic.
+- **Search** – as you type, searches everything loaded (titles, summaries, authors, sources,
+  categories), accent-insensitive, with `"exact phrases"`, `-excluded` words and `OR` between
+  alternatives; matches are highlighted.
+  **Enter** (or "Search all news too") searches all news as well: your news's matches and a news
+  search of every outlet, as a topic's, in one list with each story once. It says how many are in
+  your news and how many more it found, searches in your language and any others you pick there
+  (remembered for the next search), updates with the rest, and is kept only if you **Follow as a
+  topic**.
 - **Filter** – by source or topic, unread only, saved, time (last hour … this week) and language.
 - **Order** – newest first, oldest first, by source, or best match while searching.
 - **Read** – a reader pane with the feed's text, and the full article fetched and cleaned up

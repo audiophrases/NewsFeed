@@ -1,6 +1,6 @@
 // Search words, as typed in the search box or a topic: climate -sport "north sea", with OR between
-// alternatives (housing OR vivienda OR habitatge). The page loads this as a plain script, so these
-// are globals there; the tests load it as a module.
+// alternatives (housing OR vivienda OR habitatge), and how a search's results are put together.
+// The page loads this as a plain script, so these are globals there; the tests load it as a module.
 'use strict';
 
 /** Lower case without accents, so "Barça" finds "barca" and "habitatge" finds "Habitatge". */
@@ -48,4 +48,32 @@ function score(a, query) {
   return query.terms.reduce((n, t) => n + (title.includes(t) ? 3 : 0) + (rest.includes(t) ? 1 : 0), 0);
 }
 
-if (typeof module === 'object' && module.exports) module.exports = { fold, parseQuery, matches, score };
+/**
+ * A headline compared loosely (case, accents and punctuation ignored), when it is long enough that
+ * two alike are the same story under two links; null for short ones ("Live", "Weather").
+ */
+function storyTitle(title) {
+  const t = fold(title).replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  return t.length > 24 ? t : null;
+}
+
+/**
+ * A search of your news and a news search of all outlets as one list: your articles that match,
+ * then what the news search found that isn't among them. The same key (link) or the same long
+ * headline is the same story; the first one listed stays.
+ */
+function combineSearch(own, found) {
+  const keys = new Set(), titles = new Set(), out = [];
+  for (const a of [...own, ...found]) {
+    const t = storyTitle(a.title);
+    if (keys.has(a.key) || (t && titles.has(t))) continue;
+    keys.add(a.key);
+    if (t) titles.add(t);
+    out.push(a);
+  }
+  return out;
+}
+
+if (typeof module === 'object' && module.exports) {
+  module.exports = { fold, parseQuery, matches, score, storyTitle, combineSearch };
+}

@@ -404,6 +404,7 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 
 .web-search {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin: 8px 12px 0;
@@ -414,7 +415,10 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
   font-size: 13px;
 }
 
-.web-search span { flex: 1; min-width: 0; }
+.web-search > span { flex: 1; min-width: 0; }
+
+/* A search's languages, on a line of their own. */
+.web-search .also { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex-basis: 100%; }
 
 /* ---- reader -------------------------------------------------------------------------- */
 
@@ -650,4 +654,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .6); }
   body.reading .reader { display: flex; }
   .nav .remove { visibility: visible; }
   .articles .thumb { width: 72px; height: 72px; }
+  /* A search's languages in one line that scrolls, so its articles start higher. */
+  .web-search .also { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .web-search .also > * { flex: none; }
 }
