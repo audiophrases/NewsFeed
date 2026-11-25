@@ -51,6 +51,7 @@ test('Google News: publisher split from the title, repeated description dropped'
   const [a, b] = feed.items;
   assert.equal(a.title, 'Climate talks reach a deal in Bonn');
   assert.equal(a.publisher, 'Example News');
+  assert.equal(a.publisherUrl, 'https://news.example.com/');
   assert.equal(a.summary, '');
   assert.equal(b.publisher, 'Science Weekly');
 });
@@ -62,10 +63,11 @@ test('not a feed', () => {
   assert.ok(!looksLikeFeed(fixture('site.html')));
 });
 
-test('feed discovery from a web page', () => {
+test('feed discovery from a web page (every feed it announces; the server drops comment feeds)', () => {
   assert.deepEqual(feedLinks(fixture('site.html'), 'https://news.example.com/'), [
     { url: 'https://news.example.com/rss.xml', title: 'Example News – Top stories' },
     { url: 'https://news.example.com/atom.xml', title: null },
+    { url: 'https://news.example.com/comments/feed/', title: 'Example News » Comments Feed' },
   ]);
 });
 

@@ -38,13 +38,19 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
 ## What it does
 
 - **Sources** – about 50 built-in news feeds (world, technology, science, business, sport, and
-  news in German, French, Spanish, Catalan, Italian and Portuguese), any site's RSS/Atom feed,
-  or just a site's address: NewsFeed finds its feeds for you.
+  news in German, French, Spanish, Catalan, Italian and Portuguese), or **search for any outlet
+  by name** ("El Nacional", "Betevé") in *Add sources*: NewsFeed finds the outlets Google News
+  knows by that name and the feeds Feedly lists for it, checks every feed works, and shows each
+  with its newest headline. A site's or feed's address works too. For a site whose feed can't be
+  read, you can follow its headlines via Google News instead (a `site:` search).
 - **Topics** – follow anything ("climate", `"champions league"`, `AI -crypto`) and get headlines
-  about it from every outlet, via Google News (Bing News as a fallback), in the edition you pick.
-  A topic's view also includes matching articles from your own sources.
+  about it from every outlet, via Google News (Bing News as a fallback), in the edition you pick,
+  and **also in up to four other languages**. Names work as they are in every language; for other
+  words add the translations with OR: `housing OR vivienda OR habitatge`. A topic's view also
+  includes matching articles from your own sources.
 - **Search** – searches everything loaded (titles, summaries, authors, sources, categories),
-  accent-insensitive, with `"exact phrases"` and `-excluded` words; matches are highlighted.
+  accent-insensitive, with `"exact phrases"`, `-excluded` words and `OR` between alternatives;
+  matches are highlighted.
   "Search all news" runs the same words as a news search beyond your sources, which you can
   then follow as a topic.
 - **Filter** – by source or topic, unread only, saved, time (last hour … this week) and language.
@@ -66,7 +72,8 @@ Your sources, read marks, saved articles and settings are stored in the browser 
 | --- | --- |
 | `GET /api/directory` | built-in sources (`sources.json`) |
 | `GET /api/feed?url=` | a feed's articles |
-| `GET /api/search?q=&lang=en&country=US` | news about a topic |
+| `GET /api/search?q=&editions=ca-ES,en-US` | news about a topic, in one or more editions (up to 5; or `lang=&country=`) |
+| `GET /api/sources?q=&lang=&country=` | outlets and working feeds for a name |
 | `GET /api/discover?url=` | feeds a site offers |
 | `GET /api/article?url=` | an article's readable text |
 

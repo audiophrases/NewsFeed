@@ -74,14 +74,33 @@ const savePrefs = () => store(KEY_PREFS, prefs);
 
 // ---- sources -----------------------------------------------------------------------------
 
-const sid = s => (s.kind === 'topic' ? `topic|${s.lang}-${s.country}|${s.q.toLowerCase()}` : 'rss|' + s.url);
+/** Most editions one topic searches; each is one more news search on every refresh. */
+const MAX_EDITIONS = 5;
+
+/** A topic's editions, its main one first. (Topics from before there were several have one.) */
+const topicEditions = s => (Array.isArray(s.editions) && s.editions.length ? s.editions : [`${s.lang}-${s.country}`]);
+
+/** Editions as given, keeping only known shapes and no repeats, at most MAX_EDITIONS. */
+const cleanEditions = list => [...new Set((Array.isArray(list) ? list : []).filter(e => /^[a-z]{2}-[A-Z]{2}$/.test(e)))]
+    .slice(0, MAX_EDITIONS);
+
+// A one-edition topic keeps the id it had before topics could have more, with its read marks.
+const sid = s => (s.kind === 'topic' ? `topic|${topicEditions(s).join('+')}|${s.q.toLowerCase()}` : 'rss|' + s.url);
 const sourceById = id => sources.find(s => sid(s) === id) || (webSearch && sid(webSearch) === id ? webSearch : null);
 
 function apiUrl(s) {
   if (s.kind === 'topic') {
-    return `/api/search?q=${encodeURIComponent(s.q)}&lang=${s.lang}&country=${s.country}`;
+    return `/api/search?q=${encodeURIComponent(s.q)}&editions=${topicEditions(s).join(',')}`;
   }
   return `/api/feed?url=${encodeURIComponent(s.url)}`;
+}
+
+/** A topic as it is stored: its main edition in lang and country, all of them in editions. */
+function topicEntry(s) {
+  const editions = cleanEditions(s.editions).length ? cleanEditions(s.editions)
+      : [`${s.lang || 'en'}-${s.country || 'US'}`];
+  const [lang, country] = editions[0].split('-');
+  return { kind: 'topic', q: s.q, lang, country, editions, name: s.name || s.q };
 }
 
 async function getJson(url) {
@@ -171,7 +190,6 @@ function linkKey(link) {
   }
 }
 
-const fold = s => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 const titleKey = t => fold(t).replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
 let rebuildTimer = null;
@@ -209,7 +227,7 @@ function rebuild() {
         key, sid: id, sids: [id], title: item.title, link, summary: item.summary, image: item.image,
         author: item.author, categories: item.categories || [], publishedAt: item.publishedAt || 0,
         sourceName: item.publisher || s.name, country: item.publisher ? null : s.country,
-        lang: s.lang || got.language || null,
+        lang: item.lang || s.lang || got.language || null,
       };
       articles.push(a);
       byKey.set(key, a);
@@ -231,7 +249,7 @@ function webArticles() {
     return byKey.get(key) || {
       key, sid: sid(webSearch), sids: [sid(webSearch)], title: item.title, link, summary: item.summary,
       image: item.image, author: item.author, categories: item.categories || [], publishedAt: item.publishedAt || 0,
-      sourceName: item.publisher || webSearch.name, country: null, lang: webSearch.lang,
+      sourceName: item.publisher || webSearch.name, country: null, lang: item.lang || webSearch.lang,
     };
   });
 }
@@ -240,30 +258,7 @@ const articleByKey = key => byKey.get(key) || saved.get(key) || webArticles().fi
 
 // ---- search and filters ------------------------------------------------------------------
 
-/** "climate -sport "north sea"" -> include [climate, north sea], exclude [sport]. */
-function parseQuery(q) {
-  const include = [], exclude = [];
-  for (const m of (q || '').matchAll(/(-?)"([^"]+)"|(-?)(\S+)/g)) {
-    const neg = m[1] || m[3];
-    const term = fold(m[2] || m[4]);
-    if (!term || /^(or|and)$/.test(term) || /^(when|site|intitle|source):/.test(term)) continue;
-    (neg ? exclude : include).push(term);
-  }
-  return { include, exclude };
-}
-
-const haystack = a => fold([a.title, a.summary, a.author, a.sourceName, ...a.categories].join(' \n '));
-
-function matches(a, query) {
-  if (!query.include.length && !query.exclude.length) return true;
-  const text = haystack(a);
-  return query.include.every(t => text.includes(t)) && !query.exclude.some(t => text.includes(t));
-}
-
-function score(a, query) {
-  const title = fold(a.title), rest = haystack(a);
-  return query.include.reduce((n, t) => n + (title.includes(t) ? 3 : 0) + (rest.includes(t) ? 1 : 0), 0);
-}
+// parseQuery, matches and score (search words, with OR) are in query.js.
 
 /** Articles of the current view, before the language, time, unread and search filters. */
 function viewArticles() {
@@ -366,7 +361,7 @@ function sourceItem(s, kind) {
     const list = kind === 'topic' ? viewArticlesFor(view) : articles.filter(a => a.sids.includes(id));
     const n = list.filter(a => !readKeys.has(a.key)).length;
     badge.textContent = n ? String(n) : '';
-    li.title = kind === 'topic' ? `${s.q} · ${s.lang}-${s.country}` : s.url;
+    li.title = kind === 'topic' ? `${s.q} · ${topicEditions(s).join(', ')}` : s.url;
   }
   const remove = iconButton('i-close', `Stop following ${s.name}`, () => unfollow(s));
   remove.classList.add('remove');
@@ -509,7 +504,7 @@ function highlight(text, query) {
   // Folding keeps lengths for Latin text; if it didn't, don't risk marking the wrong letters.
   if (folded.length !== text.length) return [text];
   const ranges = [];
-  for (const t of query.include) {
+  for (const t of query.terms) {
     for (let i = folded.indexOf(t); i >= 0; i = folded.indexOf(t, i + t.length)) ranges.push([i, i + t.length]);
   }
   if (!ranges.length) return [text];
@@ -785,7 +780,7 @@ async function follow(s, { quiet = false, fetchNow = true } = {}) {
     return false;
   }
   const entry = s.kind === 'topic'
-      ? { kind: 'topic', q: s.q, lang: s.lang, country: s.country, name: s.name || s.q }
+      ? topicEntry(s)
       : { kind: 'rss', url: s.url, name: s.name, lang: s.lang || null, country: s.country || null };
   sources.push(entry);
   saveSources();
@@ -833,11 +828,12 @@ function setStep(title, confirmText, back) {
   $('add-back').hidden = !back;
 }
 
-function showGroups() {
+function showGroups(q = '') {
   addMode = null;
   setStep('Add sources', null, false);
   const have = new Set(sources.map(sid));
   $('add-body').replaceChildren(
+      sourceSearchForm(typeof q === 'string' ? q : ''),
       choice('Follow a topic…', 'News about anything, from every outlet', showTopicForm),
       choice('Website or feed address…', 'Any site with an RSS or Atom feed', showAddressForm),
       ...directory.groups.map(g => {
@@ -876,8 +872,24 @@ function defaultEdition() {
   return (EDITIONS.find(([code]) => code.startsWith(lang + '-')) || EDITIONS[0])[0];
 }
 
+/** The languages editions come in, by their own names: [['en', 'English'], ['de', 'Deutsch'], …]. */
+const EDITION_LANGS = [...new Map(EDITIONS.map(([code, name]) => [code.split('-')[0], name.split(' · ')[0]]))];
+
+/** The edition for a language, in the given country if it has one there (es → es-MX for MX). */
+function editionFor(lang, country) {
+  const codes = EDITIONS.map(([code]) => code);
+  return codes.find(c => c === `${lang}-${country}`) || codes.find(c => c.startsWith(lang + '-'));
+}
+
+/** Languages a topic being set up also searches in, besides its main edition's. */
+let topicAlso = new Set();
+
+const TOPIC_HELP = 'Headlines about this from outlets everywhere, via Google News. Use quotes for exact '
+    + 'phrases, - to leave words out and OR between alternatives. Press Enter to preview.';
+
 function showTopicForm(q = '') {
   addMode = 'topic';
+  topicAlso = new Set();
   setStep('Follow a topic', 'Follow', true);
   const form = el('div', 'form');
   const input = dialogInput('text', 'topic-q', 'e.g. climate, "champions league", AI -crypto', previewTopic);
@@ -887,14 +899,49 @@ function showTopicForm(q = '') {
   edition.setAttribute('aria-label', 'News edition');
   for (const [code, name] of EDITIONS) edition.append(new Option(name, code));
   edition.value = defaultEdition();
-  const help = el('p', 'help', 'Headlines about this from outlets everywhere, via Google News. '
-      + 'Use quotes for exact phrases and - to leave words out. Press Enter to preview.');
+  edition.addEventListener('change', () => {
+    topicAlso.delete(edition.value.split('-')[0]);
+    renderTopicLanguages();
+    clearTopicPreview();
+  });
+  const alsoHead = el('p', 'help', 'Also search in:');
+  const also = el('div', 'chips');
+  also.id = 'topic-also';
+  const alsoHelp = el('p', 'help small', 'Names work as they are in every language. For other words, add '
+      + 'the translations with OR, e.g. housing OR vivienda OR habitatge.');
+  const help = el('p', 'help', TOPIC_HELP);
   help.id = 'topic-help';
   const preview = el('ul', 'preview');
   preview.id = 'topic-preview';
-  form.append(input, edition, help);
+  form.append(input, edition, alsoHead, also, alsoHelp, help);
   $('add-body').replaceChildren(form, preview);
+  renderTopicLanguages();
   input.focus();
+}
+
+/** One switch per language other than the main edition's. */
+function renderTopicLanguages() {
+  const main = $('topic-edition').value.split('-')[0];
+  $('topic-also').replaceChildren(...EDITION_LANGS.filter(([lang]) => lang !== main).map(([lang, name]) => {
+    const on = topicAlso.has(lang);
+    const b = el('button', 'chip small', name);
+    b.type = 'button';
+    b.setAttribute('aria-pressed', String(on));
+    b.addEventListener('click', () => {
+      if (on) topicAlso.delete(lang);
+      else if (topicAlso.size + 1 >= MAX_EDITIONS) return toast(`Up to ${MAX_EDITIONS} languages per topic`);
+      else topicAlso.add(lang);
+      renderTopicLanguages();
+      clearTopicPreview();
+    });
+    return b;
+  }));
+}
+
+function clearTopicPreview() {
+  previewRequest++;
+  $('topic-help').textContent = TOPIC_HELP;
+  $('topic-preview').replaceChildren();
 }
 
 let previewRequest = 0;
@@ -902,8 +949,10 @@ let previewRequest = 0;
 function topicFromForm() {
   const q = $('topic-q').value.trim();
   if (!q) return null;
-  const [lang, country] = $('topic-edition').value.split('-');
-  return { kind: 'topic', q, lang, country, name: q };
+  const main = $('topic-edition').value;
+  const country = main.split('-')[1];
+  const editions = [main, ...[...topicAlso].map(lang => editionFor(lang, country)).filter(Boolean)];
+  return topicEntry({ q, editions });
 }
 
 async function previewTopic() {
@@ -916,10 +965,16 @@ async function previewTopic() {
     const feed = await getJson(apiUrl(t));
     if (request !== previewRequest || addMode !== 'topic') return;
     loaded.set(sid(t), { items: feed.items, language: feed.language, error: null, at: Date.now() });
-    $('topic-help').textContent = feed.items.length ? `${feed.items.length} recent articles, for example:` : 'No news found for this right now.';
-    $('topic-preview').replaceChildren(...feed.items.slice(0, 6).map(item => {
+    const perLang = new Map();
+    for (const item of feed.items) perLang.set(item.lang, (perLang.get(item.lang) || 0) + 1);
+    const split = perLang.size > 1 ? ` (${[...perLang].map(([l, n]) => `${languageName(l)} ${n}`).join(' · ')})` : '';
+    const failed = (feed.failed || []).map(f => `${languageName(f.edition.split('-')[0])} failed: ${f.error}.`).join(' ');
+    $('topic-help').textContent = (feed.items.length ? `${feed.items.length} recent articles${split}, for example:`
+        : 'No news found for this right now.') + (failed ? ' ' + failed : '');
+    $('topic-preview').replaceChildren(...previewSample(feed.items, 6).map(item => {
       const li = el('li', '', item.title);
-      li.append(el('div', 'detail', [item.publisher, item.publishedAt ? age(item.publishedAt) : ''].filter(Boolean).join(' · ')));
+      li.append(el('div', 'detail', [item.publisher, perLang.size > 1 ? languageName(item.lang) : '',
+        item.publishedAt ? age(item.publishedAt) : ''].filter(Boolean).join(' · ')));
       return li;
     }));
   } catch (e) {
@@ -927,11 +982,149 @@ async function previewTopic() {
   }
 }
 
-function showAddressForm() {
+/** A few articles for the preview, taking turns between languages so each one shows. */
+function previewSample(items, n) {
+  const byLang = new Map();
+  for (const item of items) {
+    if (!byLang.has(item.lang)) byLang.set(item.lang, []);
+    byLang.get(item.lang).push(item);
+  }
+  const out = [];
+  for (let i = 0; out.length < n && out.length < items.length; i++) {
+    for (const list of byLang.values()) if (list[i] && out.length < n) out.push(list[i]);
+  }
+  return out;
+}
+
+// ---- searching for a source by name --------------------------------------------------------
+
+/** The search box at the top of "Add sources". */
+function sourceSearchForm(q) {
+  const form = el('div', 'form');
+  const input = dialogInput('search', 'source-q', 'Search for a source, e.g. El Nacional, Betevé', searchSources);
+  input.value = q;
+  input.setAttribute('aria-label', 'Search for a source');
+  const help = el('p', 'help', 'A news outlet’s name, or a site or feed address. Press Enter to search.');
+  help.id = 'source-help';
+  form.append(input, help);
+  // On a phone the keyboard would cover the list before you chose to type.
+  if (!narrow()) setTimeout(() => input.focus());
+  return form;
+}
+
+/** "elnacional.cat", "https://…": an address to look at rather than a name to search for. */
+const looksLikeAddress = q => /^https?:\/\//i.test(q) || /^[\w-]+(\.[\w-]+)+(\/\S*)?$/.test(q);
+
+/** Whether a name or address fits the words typed (accents and case aside). */
+function nameMatches(q, ...texts) {
+  const words = fold(q).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const text = fold(texts.join(' '));
+  return words.length > 0 && words.every(w => text.includes(w));
+}
+
+let sourceQuery = '';
+
+async function searchSources() {
+  const q = $('source-q').value.trim();
+  if (!q) return;
+  if (looksLikeAddress(q)) {
+    showAddressForm(q);
+    return discoverFeeds();
+  }
+  sourceQuery = q;
+  addMode = 'search';
+  setStep('Add sources', 'Add', true);
+  const results = el('div');
+  results.id = 'source-results';
+  $('add-body').replaceChildren(sourceSearchForm(q), results);
+  $('source-q').blur();
+  const builtIn = directory.sources.filter(s => nameMatches(q, s.name, hostOf(s.url))).map(s => ({ kind: 'rss', ...s }));
+  renderSourceResults(builtIn, null);
+  const [lang, country] = defaultEdition().split('-');
+  let found;
+  try {
+    found = await getJson(`/api/sources?q=${encodeURIComponent(q)}&lang=${lang}&country=${country}`);
+  } catch (e) {
+    if (addMode === 'search' && sourceQuery === q) $('source-help').textContent = `Search failed: ${e.message}`;
+    return;
+  }
+  if (addMode !== 'search' || sourceQuery !== q) return;
+  renderSourceResults(builtIn, found.sites);
+}
+
+/** Sites in the languages this browser asks for first, then the rest as they came. */
+function byPreferredLanguage(sites) {
+  const prefs = (navigator.languages || [navigator.language || 'en']).map(l => l.split('-')[0].toLowerCase());
+  const rank = site => {
+    const ranks = site.feeds.map(f => prefs.indexOf(f.language)).filter(i => i >= 0);
+    return ranks.length ? Math.min(...ranks) : prefs.length;
+  };
+  return sites.map((site, i) => ({ site, i, r: rank(site) })).sort((a, b) => a.r - b.r || a.i - b.i).map(x => x.site);
+}
+
+/** Built-in matches, then each site found with its feeds, as boxes to tick. sites null: still searching. */
+function renderSourceResults(builtIn, sites) {
+  const have = new Set(sources.map(sid));
+  addCandidates = [];
+  const rows = [];
+  const row = (s, detail) => {
+    const label = el('label', 'choice');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.dataset.index = addCandidates.length;
+    addCandidates.push(s);
+    const following = have.has(sid(s));
+    box.checked = following;
+    box.disabled = following;
+    const name = el('span', 'name', s.name);
+    name.append(el('span', 'detail', following ? 'Following' : detail));
+    label.append(box, flag(s.country), name);
+    return label;
+  };
+  if (builtIn.length) {
+    rows.push(el('div', 'group-head', 'Built in'));
+    for (const s of builtIn) rows.push(row(s, hostOf(s.url)));
+  }
+  for (const site of byPreferredLanguage(sites || [])) {
+    const head = el('div', 'group-head', site.name);
+    head.append(el('span', 'detail', site.host));
+    rows.push(head);
+    if (!site.feeds.length) {
+      const note = el('p', 'help indent', site.error
+        ? `This site doesn’t let NewsFeed read its feeds (${site.error}). `
+        : 'No RSS feed found on this site. ');
+      note.append(button('primary-text', 'Follow its headlines via Google News', () => followSiteHeadlines(site)));
+      rows.push(note);
+    }
+    for (const f of site.feeds) {
+      const s = { kind: 'rss', url: f.url, name: f.title || site.name, lang: f.language, country: guessCountry(f.url, f.language) };
+      const detail = [`${f.count} articles`, f.language ? languageName(f.language) : '', f.sample ? `“${f.sample}”` : hostOf(f.url)];
+      rows.push(row(s, detail.filter(Boolean).join(' · ')));
+    }
+  }
+  $('source-results').replaceChildren(...rows);
+  const fresh = [...$('source-results').querySelectorAll('input:not(:disabled)')];
+  if (fresh.length === 1 && sites) fresh[0].checked = true;
+  const feeds = (sites || []).reduce((n, site) => n + site.feeds.length, 0);
+  $('source-help').textContent = !sites ? 'Searching the web for sources…'
+    : !builtIn.length && !sites.length ? 'Nothing found by that name. Try another spelling, or paste the site’s address.'
+    : builtIn.length + feeds ? 'Tick the ones you want, then press Add.'
+    : 'No feeds found for that name.';
+}
+
+/** A site without a feed we can read, followed as a news search for its own articles (site:…). */
+async function followSiteHeadlines(site) {
+  const topic = topicEntry({ q: `site:${site.host}`, editions: [defaultEdition()], name: site.name });
+  $('add-dialog').close();
+  if (await follow(topic)) setView('topic:' + sid(topic));
+}
+
+function showAddressForm(url = '') {
   addMode = 'address';
   setStep('Website or feed', 'Find feeds', true);
   const form = el('div', 'form');
   const input = dialogInput('url', 'address', 'https://example.com or a feed address', discoverFeeds);
+  input.value = typeof url === 'string' ? url : '';
   const help = el('p', 'help', 'Paste a news site’s address, or the address of its RSS or Atom feed.');
   help.id = 'address-help';
   form.append(input, help);
@@ -991,7 +1184,7 @@ function guessCountry(url, lang) {
 }
 
 async function confirmAdd() {
-  if (addMode === 'group' || addMode === 'found') {
+  if (addMode === 'group' || addMode === 'found' || addMode === 'search') {
     const picked = [...$('add-body').querySelectorAll('input:checked:not(:disabled)')]
         .map(box => addCandidates[Number(box.dataset.index)]);
     if (!picked.length) return toast('Pick at least one source');
@@ -1049,7 +1242,7 @@ $('add-dialog').querySelector('form').addEventListener('submit', e => {
 
 $('add-back').addEventListener('click', () => {
   if (addMode === 'found') showAddressForm();
-  else showGroups();
+  else showGroups(addMode === 'search' ? sourceQuery : '');
 });
 
 // ---- export and import -------------------------------------------------------------------
@@ -1081,7 +1274,7 @@ async function importFile(file) {
   const fresh = [];
   for (const s of list) {
     const entry = s.kind === 'topic'
-        ? { kind: 'topic', q: s.q, lang: s.lang || 'en', country: s.country || 'US', name: s.name || s.q }
+        ? topicEntry(s)
         : { kind: 'rss', url: s.url, name: s.name || hostOf(s.url), lang: s.lang || null, country: s.country || guessCountry(s.url) };
     if (sources.some(x => sid(x) === sid(entry))) continue;
     sources.push(entry);

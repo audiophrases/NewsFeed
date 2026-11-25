@@ -17,11 +17,15 @@ const site = http.createServer((req, res) => {
     '/': ['site.html', 'text/html'], '/rss.xml': ['rss.xml', 'application/rss+xml'],
     '/atom.xml': ['atom.xml', 'application/atom+xml'], '/latin1.xml': ['latin1.xml', 'application/rss+xml'],
     '/story': ['article.html', 'text/html; charset=utf-8'],
+    '/comments/feed/': ['rss.xml', 'application/rss+xml'],
   };
   if (req.url === '/moved') {
     res.writeHead(301, { Location: '/rss.xml' });
     return res.end();
   }
+  const u = new URL(req.url, siteUrl);
+  if (u.pathname === '/gnews') return res.end(newsSearchXml(u.searchParams.get('q'), u.searchParams.get('hl')));
+  if (u.pathname === '/feedly') return res.end(JSON.stringify(feedSearchJson()));
   const route = routes[req.url];
   if (!route) {
     res.writeHead(404);
@@ -31,6 +35,21 @@ const site = http.createServer((req, res) => {
   res.end(fs.readFileSync(path.join(FIXTURES, route[0])));
 });
 
+/** Stands in for Google News: one story from this site per edition, one from another outlet. */
+const newsSearchXml = (q, hl) => `<?xml version="1.0"?><rss version="2.0"><channel><title>${q} - Google News</title>
+<item><title>${q} story in ${hl} - Example News</title><link>${siteUrl}/story?hl=${hl}</link><guid>${hl}-1</guid>
+<pubDate>Mon, 23 Nov 2026 10:05:00 GMT</pubDate><source url="${siteUrl}">Example News</source></item>
+<item><title>Other story in ${hl} - Elsewhere</title><link>https://elsewhere.example/${hl}</link><guid>${hl}-2</guid>
+<pubDate>Mon, 23 Nov 2026 09:00:00 GMT</pubDate><source url="https://elsewhere.example">Elsewhere</source></item>
+</channel></rss>`;
+
+/** Stands in for Feedly's feed search: two feeds of this site and one unrelated. */
+const feedSearchJson = () => ({ results: [
+  { feedId: `feed/${siteUrl}/rss.xml`, title: 'Example News', website: siteUrl, subscribers: 10 },
+  { feedId: `feed/${siteUrl}/latin1.xml`, title: 'Example News en français', website: siteUrl, subscribers: 5 },
+  { feedId: 'feed/https://unrelated.example/feed', title: 'Unrelated', website: 'https://unrelated.example' },
+] });
+
 let siteUrl, appUrl;
 
 test.before(async () => {
@@ -38,6 +57,8 @@ test.before(async () => {
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   siteUrl = `http://127.0.0.1:${site.address().port}`;
   appUrl = `http://127.0.0.1:${server.address().port}`;
+  process.env.GOOGLE_NEWS_URL = siteUrl + '/gnews';
+  process.env.FEED_SEARCH_URL = siteUrl + '/feedly';
 });
 
 test.after(() => {
@@ -122,4 +143,30 @@ test('health check for the host', async () => {
   const res = await fetch(appUrl + '/health');
   assert.equal(res.status, 200);
   assert.equal(await res.text(), 'ok');
+});
+
+test('a topic in several editions: one search each, every article tagged with its language', async () => {
+  const { status, body } = await api('/api/search', { q: 'climate', editions: 'en-US,ca-ES,en-US,nonsense' });
+  assert.equal(status, 200);
+  assert.deepEqual(body.items.map(i => [i.title, i.lang]), [
+    ['climate story in en-US', 'en'], ['Other story in en-US', 'en'],
+    ['climate story in ca-ES', 'ca'], ['Other story in ca-ES', 'ca'],
+  ]);
+  assert.deepEqual(body.failed, []);
+  const older = await api('/api/search', { q: 'climate', lang: 'ca', country: 'ES' });
+  assert.deepEqual(older.body.items.map(i => i.lang), ['ca', 'ca'], 'lang and country still work');
+});
+
+test('search for a source by name: the outlet’s own feeds and the listed ones, checked', async () => {
+  const { status, body } = await api('/api/sources', { q: 'example news', lang: 'en', country: 'US' });
+  assert.equal(status, 200);
+  assert.equal(body.sites.length, 1, 'the other outlet and the unrelated feed are left out');
+  const [found] = body.sites;
+  assert.equal(found.name, 'Example News');
+  assert.equal(found.home, siteUrl);
+  assert.deepEqual(found.feeds.map(f => f.url.replace(siteUrl, '')), ['/rss.xml', '/atom.xml', '/latin1.xml'],
+      'from the site first, no duplicates, no comments feed');
+  assert.equal(found.feeds[0].count, 2);
+  assert.equal(found.feeds[0].sample, 'Climate talks reach a deal in Bonn');
+  assert.equal((await api('/api/sources', { q: '' })).status, 400);
 });
