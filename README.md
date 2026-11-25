@@ -53,7 +53,12 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   about it from every outlet, via Google News (Bing News as a fallback), in the edition you pick,
   and **also in up to four other languages**. Names work as they are in every language; for other
   words add the translations with OR: `housing OR vivienda OR habitatge`. A topic's view also
-  includes matching articles from your own sources.
+  includes matching articles from your own sources. Its articles open in the reader like any
+  other: Google News links don't name the article's address, so when you open one the server asks
+  Google where it leads (the lookup Google's own article page makes in a browser; not a published
+  API, so it may change), then reads the article from its site. It asks only for articles you
+  open, one at a time; your browser and the server remember every answer, and after Google
+  refuses a lookup the server leaves it alone for 30 minutes.
 - **Search** – searches everything loaded (titles, summaries, authors, sources, categories),
   accent-insensitive, with `"exact phrases"`, `-excluded` words and `OR` between alternatives;
   matches are highlighted.
@@ -89,7 +94,7 @@ Your sources, read marks, saved articles and settings are stored in the browser 
 | `GET /api/sources?q=&lang=&country=` | outlets and working feeds for a name |
 | `GET /api/discover?url=` | feeds a site offers |
 | `GET /api/icon?url=` | the icon of that address's site (cached a day; 404 if it has none) |
-| `GET /api/article?url=` | an article's readable text |
+| `GET /api/article?url=` | an article's readable text and how complete it is (a Google News link is looked up first) |
 
 The server won't fetch addresses on your local network (so a page can't use it to reach your
 router etc.). Set `ALLOW_PRIVATE=1` if you want to read feeds hosted on your own network.

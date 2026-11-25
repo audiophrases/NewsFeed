@@ -114,3 +114,14 @@ test('a text that is one unfinished paragraph is kept, not emptied', () => {
   const html = page('', '<article><p>Tutti questi dati hanno spinto il ministro verso la riforma del Codice della strada</p></article>');
   assert.equal(extractArticle(html, URL).blocks.length, 1);
 });
+
+test('an article written as text with line breaks instead of paragraphs (Altafulla Ràdio)', () => {
+  const html = page('', `<div class="title-noticia">L’Ajuntament de Torredembarra es replantejarà el servei del bus urbà</div>
+    <div class="text-noticia">L’Ajuntament de Torredembarra vol replantejar el servei del bus urbà, per fer-lo més eficient.<br />
+    <br />El primer tinent d’alcalde ho ha explicat en el ple d’aquest dilluns, en resposta a una pregunta.<br />
+    <br />Pino ha assenyalat que els principals usuaris del bus urbà són els nens i joves que van a l’escola.<br /></div>
+    <div class="share"><a href="/">Inici</a> | <a href="/x">Contacte</a></div>`);
+  const a = extractArticle(html, URL);
+  assert.equal(a.blocks.length, 3);
+  assert.match(a.blocks[0].text, /^L’Ajuntament de Torredembarra vol replantejar/);
+});

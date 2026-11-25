@@ -12,7 +12,37 @@ const path = require('path');
 const { server } = require('../server');
 
 const FIXTURES = path.join(__dirname, 'fixtures');
+/** What the stand-in Google News was asked: lookups it answered. */
+const lookups = [];
+
+/** Stands in for Google News' article pages and the lookup they make (see lib/googlenews.js). */
+function googleNews(req, res, u) {
+  if (req.method === 'POST' && u.pathname === '/_/DotsSplashUi/data/batchexecute') {
+    let body = '';
+    req.on('data', c => { body += c; });
+    req.on('end', () => {
+      const asked = decodeURIComponent(body);
+      lookups.push(asked);
+      if (asked.includes('CBMiRefused')) {
+        res.writeHead(429);
+        return res.end('Too many requests');
+      }
+      const ok = asked.includes('SIG-OK') && asked.includes('1764081234');
+      res.end(ok ? `)]}'\n\n[["wrb.fr","Fbv4je","[\\"garturlres\\",\\"${siteUrl}/story\\",1]",null,null,null,"generic"],["di",12]]`
+        : `)]}'\n\n[["wrb.fr","Fbv4je",null,null,null,[3],"generic"]]`);
+    });
+    return true;
+  }
+  if (u.pathname.startsWith('/rss/articles/')) {
+    const signed = !u.pathname.includes('NoSignature');
+    res.end(`<html><body><c-wiz ${signed ? 'data-n-a-sg="SIG-OK" data-n-a-ts="1764081234"' : ''}></c-wiz></body></html>`);
+    return true;
+  }
+  return false;
+}
+
 const site = http.createServer((req, res) => {
+  if (googleNews(req, res, new URL(req.url, siteUrl))) return;
   const routes = {
     '/': ['site.html', 'text/html'], '/rss.xml': ['rss.xml', 'application/rss+xml'],
     '/atom.xml': ['atom.xml', 'application/atom+xml'], '/latin1.xml': ['latin1.xml', 'application/rss+xml'],
@@ -68,6 +98,7 @@ test.before(async () => {
   appUrl = `http://127.0.0.1:${server.address().port}`;
   process.env.GOOGLE_NEWS_URL = siteUrl + '/gnews';
   process.env.FEED_SEARCH_URL = siteUrl + '/feedly';
+  process.env.GOOGLE_NEWS_SITE = siteUrl;
 });
 
 test.after(() => {
@@ -198,4 +229,30 @@ test('site icons: the one the home page names, checked to be an image, kept from
 test('found feeds say which site they are on', async () => {
   const { body } = await api('/api/discover', { url: siteUrl + '/' });
   assert.deepEqual(body.map(f => f.site), ['Example News', 'Example News']);
+});
+
+test('a topic\'s article: its Google News link looked up (once), then the article read', async () => {
+  const link = `${siteUrl}/rss/articles/CBMiGoodArticle_000000001?oc=5`;
+  const first = await api('/api/article', { url: link });
+  assert.equal(first.status, 200);
+  assert.equal(first.body.url, siteUrl + '/story', 'the article\'s own address, for "Read on"');
+  assert.equal(first.body.site, 'Example News');
+  assert.equal(lookups.length, 1);
+  await api('/api/article', { url: link });
+  assert.equal(lookups.length, 1, 'remembered: Google is not asked again');
+});
+
+test('when Google News doesn\'t say where an article is, the reader is told so', async () => {
+  const { status, body } = await api('/api/article', { url: `${siteUrl}/rss/articles/CBMiNoSignature_00000002` });
+  assert.equal(status, 502);
+  assert.match(body.error, /Google News didn’t say where this article is/);
+});
+
+test('after Google refuses a lookup, lookups pause instead of insisting', async () => {
+  const refused = await api('/api/article', { url: `${siteUrl}/rss/articles/CBMiRefused_000000000003` });
+  assert.match(refused.body.error, /isn’t answering lookups just now/);
+  const asked = lookups.length;
+  const next = await api('/api/article', { url: `${siteUrl}/rss/articles/CBMiAfterPause_00000004` });
+  assert.match(next.body.error, /isn’t answering lookups just now/);
+  assert.equal(lookups.length, asked, 'not asked while paused');
 });

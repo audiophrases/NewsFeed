@@ -12,11 +12,12 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 
-const { getText, getBytes, reason } = require('./lib/fetch');
+const { getText, getBytes, postText, reason, FetchError } = require('./lib/fetch');
 const { parseFeed, feedLinks, looksLikeFeed, tags, attrOf, absolute, entities } = require('./lib/feeds');
 const { extractArticle } = require('./lib/article');
 const { candidateSites, feedBelongs, feedKey } = require('./lib/sources');
 const { iconCandidates, imageType, ICON_MAX_BYTES } = require('./lib/icons');
+const googleLinks = require('./lib/googlenews');
 
 const PORT = Number(process.env.PORT) || 8091;
 // All interfaces, so phones on the same Wi-Fi can connect; HOST=127.0.0.1 keeps it to this PC.
@@ -34,6 +35,11 @@ const SEARCH_SLOTS = 3;
 // Where news and feed searches go; the tests point these at a local site.
 const googleNews = () => process.env.GOOGLE_NEWS_URL || 'https://news.google.com/rss/search';
 const feedSearch = () => process.env.FEED_SEARCH_URL || 'https://cloud.feedly.com/v3/search/feeds';
+const googleNewsSite = () => process.env.GOOGLE_NEWS_SITE || 'https://news.google.com';
+/** Where Google News links lead, remembered for a month: an article's address doesn't change. */
+const LINK_CACHE_MS = 30 * 24 * 60 * 60 * 1000;
+/** After Google refuses a lookup, how long to leave it alone. */
+const GOOGLE_PAUSE_MS = 30 * 60 * 1000;
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -259,6 +265,46 @@ async function siteIcon(origin) {
   return null;
 }
 
+/** A Google News article link (on Google News, or on the stand-in the tests use). */
+function isGoogleNewsLink(url) {
+  const u = new URL(url);
+  const own = u.hostname === 'news.google.com' || u.origin === new URL(googleNewsSite()).origin;
+  return own && Boolean(googleLinks.articleId(url));
+}
+
+/** Lookups go one at a time, and stop for a while after Google refuses one. */
+const inLookupSlot = slots(1);
+let googlePausedUntil = 0;
+
+/**
+ * Where a Google News article link leads: asked of Google the way its own article page asks in
+ * a browser (the page carries a signature for it). Only for an article someone opens.
+ */
+async function articleAddress(link) {
+  const id = googleLinks.articleId(link);
+  const inside = googleLinks.addressInside(id);
+  if (inside) return inside;
+  return inLookupSlot(async () => {
+    if (Date.now() < googlePausedUntil) throw new FetchError('Google News isn’t answering lookups just now');
+    try {
+      const page = await getText(`${googleNewsSite()}/rss/articles/${id}`, {}, 1024 * 1024);
+      const signature = googleLinks.signatureOf(page.text);
+      if (!signature) throw new FetchError('Google News didn’t say where this article is');
+      const answer = await postText(`${googleNewsSite()}/_/DotsSplashUi/data/batchexecute`, googleLinks.lookupBody(id, signature));
+      const address = googleLinks.addressFromLookup(answer);
+      if (!address) throw new FetchError('Google News didn’t say where this article is');
+      return address;
+    } catch (e) {
+      if (/HTTP (403|429)/.test(e.message)) {
+        googlePausedUntil = Date.now() + GOOGLE_PAUSE_MS;
+        console.warn(`Google News refused a lookup (${e.message}); pausing lookups for ${GOOGLE_PAUSE_MS / 60000} min`);
+        throw new FetchError('Google News isn’t answering lookups just now');
+      }
+      throw e;
+    }
+  });
+}
+
 async function readArticle(url) {
   const page = await getText(url);
   if (!/html/i.test(page.type) && !/<html|<body|<p[\s>]/i.test(page.text.slice(0, 5000))) {
@@ -350,7 +396,13 @@ async function handle(req, res) {
   if (u.pathname === '/api/article') {
     const url = webAddress(u);
     if (!url) return json(res, 400, { error: 'Not a web address' });
-    return api(res, `article ${url}`, () => cached('article|' + url, ARTICLE_CACHE_MS, () => readArticle(url)));
+    return api(res, `article ${url}`, async () => {
+      // A topic's article: first where its Google News link leads (remembered), then the article.
+      const address = isGoogleNewsLink(url)
+        ? await cached('link|' + url, LINK_CACHE_MS, () => articleAddress(url))
+        : url;
+      return cached('article|' + address, ARTICLE_CACHE_MS, () => readArticle(address));
+    });
   }
 
   const rel = u.pathname === '/' ? 'index.html' : decodeURIComponent(u.pathname.slice(1));

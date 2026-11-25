@@ -12,6 +12,9 @@ const KEY_SOURCES = 'newsfeed.sources';
 const KEY_READ = 'newsfeed.read';
 const KEY_SAVED = 'newsfeed.saved';
 const KEY_PREFS = 'newsfeed.prefs';
+const KEY_LINKS = 'newsfeed.links';
+/** Google News links whose article address is remembered, at most. */
+const LINKS_LIMIT = 3000;
 
 /** Google News editions for topics: language-COUNTRY. */
 const EDITIONS = [
@@ -662,7 +665,7 @@ function renderReaderState() {
 
 function renderReader(a) {
   $('reader').classList.add('has-article');
-  $('open-original').href = a.link || '#';
+  $('open-original').href = articleLink(a) || '#';
   $('open-original').hidden = !a.link;
   renderReaderState();
   const body = $('reader-body');
@@ -700,8 +703,7 @@ function renderReader(a) {
     readerActions(a, '', undefined, false);
   } else if (prefs.fullText && a.link && canFetch(a.link)) loadFullText(a);
   else if (a.link && !canFetch(a.link)) {
-    setStatus('summary', shownSoFar(a), `found through Google News, whose links NewsFeed can’t follow to the article. `
-        + `Read it on ${a.sourceName}.`);
+    setStatus('summary', shownSoFar(a), 'the article’s link isn’t a web address NewsFeed can open.');
     readerActions(a);
   } else {
     setStatus('summary', shownSoFar(a), 'From the feed.');
@@ -734,6 +736,8 @@ function explainFailure(message, site) {
   if (/HTTP 429/.test(message)) return `${site} is limiting requests just now; try again later.`;
   if (/Timed out/.test(message)) return `${site} took too long to answer.`;
   if (/Not a web page/.test(message)) return 'The link doesn’t lead to a web page.';
+  // The lookup of a topic's article: Google's own words, as the server puts them.
+  if (/Google News/.test(message)) return `${message}, so the article can’t be loaded here.`;
   return `The article couldn’t be loaded (${message}).`;
 }
 
@@ -746,8 +750,21 @@ function heroImage(src) {
   return img;
 }
 
-/** Google News links only lead to the article through a script page. */
-const canFetch = link => !/^https:\/\/news\.google\.com\//.test(link);
+/** Every web link can be loaded; a Google News one is first looked up (by the server, via Google). */
+const canFetch = link => /^https?:\/\//i.test(link || '');
+
+const isGoogleNews = link => /^https:\/\/news\.google\.com\//.test(link || '');
+
+/**
+ * Where Google News links lead, as the server found out: kept in this browser, so opening the
+ * same article again (even after the server has restarted) doesn't ask Google again.
+ */
+let knownLinks = new Map();
+
+const saveLinks = () => store(KEY_LINKS, [...knownLinks].slice(-LINKS_LIMIT));
+
+/** The article's own address when known (a topic's articles come as Google News links). */
+const articleLink = a => (a.link && knownLinks.get(a.link)) || a.link;
 
 /** Articles whose site refused for good (subscribers only, blocked, gone), by key: the reason. */
 const refusals = new Map();
@@ -760,9 +777,10 @@ function readerActions(a, message, openText, canRetry = true) {
   const actions = el('div', 'actions');
   if (a.link) {
     // A Google News link's own address says news.google.com; name the outlet instead.
-    const where = canFetch(a.link) ? hostOf(a.link) || 'the site' : a.sourceName;
+    const link = articleLink(a);
+    const where = isGoogleNews(link) ? a.sourceName : hostOf(link) || 'the site';
     const open = el('a', 'primary', openText || 'Read on ' + where);
-    open.href = a.link;
+    open.href = link;
     open.target = '_blank';
     open.rel = 'noopener noreferrer';
     actions.append(open);
@@ -779,10 +797,11 @@ async function loadFullText(a) {
   if (!a.link || !canFetch(a.link)) return;
   const note = $('reader-note');
   if (note) note.replaceChildren();
-  setStatus('loading', 'Loading the full article…');
+  const link = articleLink(a);
+  setStatus('loading', isGoogleNews(link) ? 'Finding the article through Google News…' : 'Loading the full article…');
   let result;
   try {
-    result = await getJson(`/api/article?url=${encodeURIComponent(a.link)}`);
+    result = await getJson(`/api/article?url=${encodeURIComponent(link)}`);
   } catch (e) {
     if (selectedKey === a.key) {
       const why = explainFailure(e.message, a.sourceName);
@@ -794,15 +813,24 @@ async function loadFullText(a) {
     }
     return;
   }
+  if (isGoogleNews(link) && result.url && !isGoogleNews(result.url)) {
+    knownLinks.delete(a.link);
+    knownLinks.set(a.link, result.url);
+    saveLinks();
+  }
   fullTexts.set(a.key, result);
-  if (selectedKey === a.key) showFullText(a, result);
+  if (selectedKey === a.key) {
+    $('open-original').href = articleLink(a);
+    showFullText(a, result);
+  }
 }
 
 const plural = (n, one, many) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
 function showFullText(a, result) {
   const text = $('reader-text');
-  const site = result.site || a.sourceName;
+  // The outlet's name as listed ("Altafulla Ràdio"), not its page's own, which can be a slogan.
+  const site = a.sourceName || result.site;
   const { status, expected, subscriber } = result.completeness || { status: 'unknown' };
   // Only replace the feed's summary with something longer.
   const summaryLength = (a.summary || '').length;
@@ -836,7 +864,7 @@ function showFullText(a, result) {
       ? `${plural(result.words, 'word', 'words')} of the ${expected.toLocaleString()} ${site} says it has`
       : `usually only the opening of a subscriber article can be read here (${plural(result.words, 'word', 'words')})`,
     subscriber);
-    readerActions(a, 'The rest is on the site.', `Read the rest on ${hostOf(a.link) || site}`);
+    readerActions(a, 'The rest is on the site.', `Read the rest on ${hostOf(articleLink(a)) || site}`);
   } else {
     setStatus('unknown', 'Text from the page', `${minutes} · ${site} doesn’t say how long the article is, so it can’t be checked for completeness`);
     readerActions(a);
@@ -1568,7 +1596,7 @@ function onKey(e) {
   const actions = {
     j: () => step(1), ArrowDown: () => step(1), k: () => step(-1), ArrowUp: () => step(-1),
     s: () => toggleSave(), m: toggleRead, r: () => refresh(), f: () => a && loadFullText(a),
-    o: () => a && a.link && window.open(a.link, '_blank', 'noopener'),
+    o: () => a && a.link && window.open(articleLink(a), '_blank', 'noopener'),
     '/': () => $('q').focus(), Escape: closeReader,
   };
   const action = actions[e.key];
@@ -1612,6 +1640,7 @@ async function start() {
   const replaced = new Map();
   sources = upgradeSources(load(KEY_SOURCES, []), replaced);
   readKeys = new Set(load(KEY_READ, []));
+  knownLinks = new Map(load(KEY_LINKS, []).filter(e => Array.isArray(e) && e.length === 2));
   saved = new Map(load(KEY_SAVED, []).filter(a => a && a.key).map(a => [a.key, a]));
   prefs = { ...prefs, ...load(KEY_PREFS, {}) };
   if (!Array.isArray(prefs.langs)) prefs.langs = [];
