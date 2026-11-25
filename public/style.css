@@ -157,6 +157,38 @@ kbd {
 
 #refresh.spinning svg { animation: spin 1s linear infinite; }
 
+/* Pull down to update: a spinner that comes down from above the list. */
+.pull {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 0;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.pull-spinner {
+  display: flex;
+  width: 40px;
+  height: 40px;
+  padding: 9px;
+  border-radius: 50%;
+  background: var(--raised);
+  color: var(--accent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .3);
+  transform: translateY(-48px);
+  opacity: 0;
+}
+
+.pull-spinner svg { width: 22px; height: 22px; }
+
+.pull.settle .pull-spinner { transition: transform .2s, opacity .2s; }
+
+.pull.ready .pull-spinner { background: var(--primary); color: var(--on-primary); }
+
+.pull.spinning svg { animation: spin 1s linear infinite; }
+
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---- layout -------------------------------------------------------------------------- */
@@ -169,6 +201,9 @@ kbd {
 }
 
 .sidebar, .list-pane, .reader-body { overflow-y: auto; }
+
+/* The list's pull to update replaces the browser's own, and its bounce. */
+.list-pane { overscroll-behavior-y: contain; }
 
 .sidebar {
   padding: 8px 8px 16px;

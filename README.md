@@ -92,7 +92,8 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   site and ticks the only one, or ticks the outlet's headlines via Google News when the site has
   no feed NewsFeed can read. If the outlet's site isn't known, it searches by the outlet's name.
 - **Keep track** – read/unread, saved articles (kept even after they leave the feed), duplicate
-  stories shown once, unread counts per source, refresh every 15 minutes.
+  stories shown once, unread counts per source, refresh every 15 minutes, or pull the list
+  down on a phone to update it now.
 - **Keyboard** – `j`/`k` next/previous, `s` save, `m` read/unread, `o` open original,
   `f` full text, `/` search, `r` refresh.
 - **Export / Import** – your sources, topics and saved articles as JSON; OPML from other feed

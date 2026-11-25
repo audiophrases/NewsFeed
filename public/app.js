@@ -168,7 +168,7 @@ async function refresh(list = sources) {
   if (all) {
     if (refreshing) return;
     refreshing = true;
-    $('refresh').classList.add('spinning');
+    showRefreshing(true);
     // Your other devices' changes first, so the right sources are fetched (but don't wait long).
     await Promise.race([syncNow(), new Promise(resolve => setTimeout(resolve, 2000))]);
     list = sources;
@@ -192,11 +192,85 @@ async function refresh(list = sources) {
   if (all) {
     refreshing = false;
     lastRefresh = Date.now();
-    $('refresh').classList.remove('spinning');
+    showRefreshing(false);
     const failed = list.filter(s => loaded.get(sid(s))?.error);
     if (failed.length) toast(`${failed.length} of ${list.length} sources could not be updated`);
   }
   rebuild();
+}
+
+function showRefreshing(on) {
+  $('refresh').classList.toggle('spinning', on);
+  if (!on && pull && pull.updating) pullSettle();
+}
+
+// ---- pull down to update (phones and tablets) --------------------------------------------
+//
+// The page itself never scrolls (the list does), so the browser's own pull-to-refresh can't
+// happen: the list does it. Pulling down from its top past PULL_READY and letting go updates
+// everything; the spinner stays until the update is done.
+
+const PULL_READY = 72;
+const PULL_MAX = 120;
+/** Where the spinner rests while updating, and how far above the list it hides. */
+const PULL_REST = 56;
+const PULL_HIDE = 48;
+
+let pull = null;
+
+function pullShow(distance, { ready = false, spinning = false, animate = false } = {}) {
+  const box = $('pull');
+  box.classList.toggle('settle', animate);
+  box.classList.toggle('ready', ready);
+  box.classList.toggle('spinning', spinning);
+  const spinner = box.firstElementChild;
+  spinner.style.transform = `translateY(${distance - PULL_HIDE}px) rotate(${spinning ? 0 : distance * 3}deg)`;
+  spinner.style.opacity = String(spinning ? 1 : Math.min(1, distance / PULL_READY));
+}
+
+/** Hides the spinner, unless an update it started is still running. */
+function pullSettle() {
+  if (pull && pull.updating && refreshing) return;
+  pull = null;
+  pullShow(0, { animate: true });
+}
+
+function setupPullToRefresh() {
+  const pane = $('list-pane');
+  pane.addEventListener('touchstart', e => {
+    if (pull && pull.updating) return;
+    // Only from the very top, with one finger, not while a filter's chips are being swiped.
+    pull = e.touches.length === 1 && pane.scrollTop <= 0
+        ? { x: e.touches[0].clientX, y: e.touches[0].clientY, distance: 0, active: null }
+        : null;
+  }, { passive: true });
+  pane.addEventListener('touchmove', e => {
+    if (!pull || pull.updating || e.touches.length !== 1) return;
+    const dx = e.touches[0].clientX - pull.x, dy = e.touches[0].clientY - pull.y;
+    // The first few pixels decide: down and mostly vertical is a pull; anything else scrolls.
+    if (pull.active === null) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      pull.active = dy > 0 && Math.abs(dy) > Math.abs(dx) && pane.scrollTop <= 0;
+      if (!pull.active) return;
+    }
+    if (!pull.active) return;
+    e.preventDefault(); // no rubber-band bounce or browser refresh meanwhile
+    // Harder to pull the further it goes.
+    pull.distance = Math.max(0, PULL_MAX * (1 - Math.exp(-dy / (PULL_MAX * 1.6))));
+    pullShow(pull.distance, { ready: pull.distance >= PULL_READY });
+  }, { passive: false });
+  const end = () => {
+    if (!pull || pull.updating) return;
+    if (pull.active && pull.distance >= PULL_READY) {
+      pull.updating = true;
+      pullShow(PULL_REST, { spinning: true, animate: true });
+      refresh().finally(pullSettle);
+    } else {
+      pullSettle();
+    }
+  };
+  pane.addEventListener('touchend', end);
+  pane.addEventListener('touchcancel', end);
 }
 
 function setProgress(text) {
@@ -2497,6 +2571,7 @@ async function start() {
   setInterval(() => { if (document.visibilityState === 'visible') refresh(); }, AUTO_REFRESH_MS);
   setInterval(() => { if (document.visibilityState === 'visible') syncNow(); }, SYNC_EVERY_MS);
 
+  setupPullToRefresh();
   render();
   renderSyncButton();
   refresh();
