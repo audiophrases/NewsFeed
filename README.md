@@ -59,6 +59,11 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   API, so it may change), then reads the article from its site. It asks only for articles you
   open, one at a time; your browser and the server remember every answer, and after Google
   refuses a lookup the server leaves it alone for 30 minutes.
+- **Edit** – the ✎ next to *Topics* or *Sources* lists everything you follow: type to rename
+  (empty gives back the original name), reorder with the arrows or by dragging the handle, remove,
+  or open more settings: a feed's flag, language and address; a Google News source's site, edition
+  and flag; a topic's words, edition and other languages. The ✎ next to a source's or topic's
+  title opens its settings directly.
 - **Search** – searches everything loaded (titles, summaries, authors, sources, categories),
   accent-insensitive, with `"exact phrases"`, `-excluded` words and `OR` between alternatives;
   matches are highlighted.

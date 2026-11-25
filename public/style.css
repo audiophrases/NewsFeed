@@ -224,6 +224,8 @@ kbd {
   letter-spacing: .04em;
 }
 
+.nav-actions { display: inline-flex; align-items: center; }
+
 .nav .hint { color: var(--faint); font-size: 13px; cursor: default; }
 
 .nav .hint:hover { background: none; }
@@ -249,6 +251,10 @@ kbd {
 .heading { display: flex; align-items: baseline; gap: 8px; }
 
 .heading h1 { margin: 0; font-size: 19px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.heading #edit-view { align-self: center; color: var(--faint); }
+
+.heading #edit-view:hover { color: var(--text); }
 
 .count { color: var(--faint); font-size: 13px; white-space: nowrap; }
 
@@ -550,6 +556,50 @@ dialog::backdrop { background: rgba(0, 0, 0, .6); }
 .dialog-body .group-head .detail { margin-left: 6px; font-weight: 400; color: var(--faint); }
 
 .dialog-body .choice .detail { overflow-wrap: anywhere; }
+
+/* Editing what you follow: one row per topic or source. */
+.dialog-body .edit-row { display: flex; align-items: center; gap: 4px; padding: 3px 4px; border-radius: 8px; }
+
+.dialog-body .edit-row.dragging { opacity: .4; }
+
+.dialog-body .edit-row.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+
+.dialog-body .edit-row.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+
+.dialog-body .edit-row .handle { display: inline-flex; width: 20px; flex: none; color: var(--faint); cursor: grab; touch-action: none; }
+
+.dialog-body .edit-row .handle svg { width: 18px; height: 18px; }
+
+.dialog-body .edit-row .glyph { display: inline-flex; justify-content: center; width: 20px; flex: none; color: var(--faint); }
+
+.dialog-body .edit-row .glyph svg { width: 16px; height: 16px; }
+
+.dialog-body .edit-row input {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  margin-left: 4px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.dialog-body .edit-row button.icon { width: 32px; height: 32px; padding: 6px; color: var(--muted); }
+
+.dialog-body .edit-row button.icon svg { width: 20px; height: 20px; }
+
+.dialog-body .edit-row button.icon:disabled { opacity: .25; cursor: default; background: none; }
+
+/* No dragging on touch screens: the arrows do it there. */
+@media (pointer: coarse) {
+  .dialog-body .edit-row .handle { display: none; }
+}
+
+.dialog-body .field { display: flex; flex-direction: column; gap: 4px; }
+
+.dialog-body .field .label { font-size: 13px; font-weight: 600; color: var(--muted); }
 
 .dialog-body .preview { list-style: none; margin: 0; padding: 0 12px 8px; }
 

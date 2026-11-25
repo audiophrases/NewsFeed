@@ -417,6 +417,8 @@ const hintItem = text => el('li', 'hint', text);
 
 function renderList() {
   $('view-title').textContent = viewTitle();
+  const [viewKind, viewId] = splitView(prefs.view);
+  $('edit-view').hidden = !((viewKind === 'source' || viewKind === 'topic') && sources.some(s => sid(s) === viewId));
   document.title = `${viewTitle()} · NewsFeed`;
   const base = viewArticles();
   renderLanguages(base);
@@ -938,14 +940,15 @@ async function follow(s, { quiet = false, fetchNow = true } = {}) {
 }
 
 function unfollow(s) {
-  if (!confirm(`Stop following ${s.name}?`)) return;
+  if (!confirm(`Stop following ${s.name}?`)) return false;
   const id = sid(s);
   sources = sources.filter(x => sid(x) !== id);
   saveSources();
   loaded.delete(id);
-  if (prefs.view.endsWith(':' + id)) prefs.view = 'all';
+  if (splitView(prefs.view)[1] === id) prefs.view = 'all';
   savePrefs();
   rebuild();
+  return true;
 }
 
 // ---- adding sources and topics (the dialog flow of Play the News) ------------------------
@@ -1029,16 +1032,26 @@ const TOPIC_HELP = 'Headlines about this from outlets everywhere, via Google New
 
 function showTopicForm(q = '') {
   addMode = 'topic';
-  topicAlso = new Set();
   setStep('Follow a topic', 'Follow', true);
   const form = el('div', 'form');
+  const { fields, preview, input } = topicFields(typeof q === 'string' ? q : '', [defaultEdition()]);
+  form.append(...fields);
+  $('add-body').replaceChildren(form, preview);
+  renderTopicLanguages();
+  input.focus();
+}
+
+/** A topic's words, main edition and other languages, as form fields (and its preview list). */
+function topicFields(q, editions) {
+  topicAlso = new Set(editions.slice(1).map(e => e.split('-')[0]));
   const input = dialogInput('text', 'topic-q', 'e.g. climate, "champions league", AI -crypto', previewTopic);
-  input.value = typeof q === 'string' ? q : '';
+  input.value = q;
+  input.setAttribute('aria-label', 'Words to follow');
   const edition = document.createElement('select');
   edition.id = 'topic-edition';
   edition.setAttribute('aria-label', 'News edition');
   for (const [code, name] of EDITIONS) edition.append(new Option(name, code));
-  edition.value = defaultEdition();
+  edition.value = editions[0];
   edition.addEventListener('change', () => {
     topicAlso.delete(edition.value.split('-')[0]);
     renderTopicLanguages();
@@ -1053,10 +1066,7 @@ function showTopicForm(q = '') {
   help.id = 'topic-help';
   const preview = el('ul', 'preview');
   preview.id = 'topic-preview';
-  form.append(input, edition, alsoHead, also, alsoHelp, help);
-  $('add-body').replaceChildren(form, preview);
-  renderTopicLanguages();
-  input.focus();
+  return { fields: [input, edition, alsoHead, also, alsoHelp, help], preview, input };
 }
 
 /** One switch per language other than the main edition's. */
@@ -1103,7 +1113,7 @@ async function previewTopic() {
   $('topic-q').blur();
   try {
     const feed = await getJson(apiUrl(t));
-    if (request !== previewRequest || addMode !== 'topic') return;
+    if (request !== previewRequest || (addMode !== 'topic' && addMode !== 'edit-one')) return;
     loaded.set(sid(t), { items: feed.items, language: feed.language, error: null, at: Date.now() });
     const perLang = new Map();
     for (const item of feed.items) perLang.set(item.lang, (perLang.get(item.lang) || 0) + 1);
@@ -1397,6 +1407,10 @@ async function confirmAdd() {
     if (await follow(t)) setView('topic:' + sid(t));
   } else if (addMode === 'address') {
     await discoverFeeds();
+  } else if (addMode === 'edit') {
+    $('add-dialog').close();
+  } else if (addMode === 'edit-one') {
+    await saveEdit();
   }
 }
 
@@ -1435,9 +1449,270 @@ $('add-dialog').querySelector('form').addEventListener('submit', e => {
 });
 
 $('add-back').addEventListener('click', () => {
-  if (addMode === 'found') showAddressForm();
+  if (addMode === 'edit-one') showEditList();
+  else if (addMode === 'found') showAddressForm();
   else showGroups(addMode === 'search' ? sourceQuery : '');
 });
+
+// ---- editing what you follow: rename, reorder, change -------------------------------------
+
+/** Countries there are flag pictures for; es-ct is Catalonia. */
+const FLAGS = ['at', 'au', 'be', 'ca', 'ch', 'de', 'es', 'es-ct', 'fr', 'gb', 'ie', 'in', 'it', 'mx', 'nl', 'nz', 'pt', 'qa', 'us'];
+
+const isTopic = s => s.kind === 'topic';
+const isSource = s => s.kind !== 'topic';
+
+/** A flag's country in the browser's language (Catalonia has no country code of its own). */
+function countryName(code) {
+  if (code === 'es-ct') return 'Catalunya';
+  try {
+    return new Intl.DisplayNames([navigator.language || 'en'], { type: 'region' }).of(code.toUpperCase());
+  } catch (e) {
+    return code.toUpperCase();
+  }
+}
+
+/** What something is called when its name is cleared: a feed's own title, a topic's words, a site. */
+function defaultName(s) {
+  if (s.kind === 'topic') return s.q;
+  if (s.kind === 'news') return s.site;
+  return loaded.get(sid(s))?.title || hostOf(s.url);
+}
+
+/** The one being changed in "More settings", and whether that was opened from the list. */
+let editing = null;
+let editFromList = false;
+let dragging = null;
+
+function openEditor(section) {
+  showEditList(section);
+  if (!$('add-dialog').open) $('add-dialog').showModal();
+  closeDrawer();
+}
+
+function openEditOne(s) {
+  editFromList = false;
+  showEditOne(s);
+  if (!$('add-dialog').open) $('add-dialog').showModal();
+  closeDrawer();
+}
+
+/** Every topic and source in its section: rename by typing, arrows or dragging to reorder. */
+function showEditList(scrollTo, focus) {
+  addMode = 'edit';
+  editing = null;
+  setStep('Edit topics and sources', 'Done', false);
+  const body = [];
+  if (!sources.length) body.push(el('p', 'help indent', 'Nothing to edit yet: follow some sources or topics first.'));
+  for (const [label, inSection] of [['Topics', isTopic], ['Sources', isSource]]) {
+    const list = sources.filter(inSection);
+    if (!list.length) continue;
+    const head = el('div', 'group-head', label);
+    head.id = 'edit-' + label.toLowerCase();
+    body.push(head, ...list.map((s, i) => editRow(s, i, list.length, inSection)));
+  }
+  if (sources.length) {
+    body.push(el('p', 'help indent', 'Type to rename (empty gives back the original name). Move with the arrows, '
+        + 'or drag by the handle. ✎ opens more settings: flag, language, address, or a topic’s words and languages.'));
+  }
+  $('add-body').replaceChildren(...body);
+  if (scrollTo) $('edit-' + scrollTo)?.scrollIntoView({ block: 'start' });
+  if (focus) $('add-body').querySelector(`.edit-row[data-id="${CSS.escape(focus.id)}"] [data-action="${focus.action}"]`)?.focus();
+}
+
+function editRow(s, index, count, inSection) {
+  const id = sid(s);
+  const row = el('div', 'edit-row');
+  row.dataset.id = id;
+  const handle = el('span', 'handle');
+  handle.title = 'Drag to reorder';
+  handle.append(svgIcon('i-drag'));
+  // Only the handle starts a drag, so selecting text in the name still works.
+  handle.addEventListener('pointerdown', () => { row.draggable = true; });
+  handle.addEventListener('pointerup', () => { row.draggable = false; });
+  row.addEventListener('dragstart', e => {
+    dragging = s;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', s.name);
+    row.classList.add('dragging');
+  });
+  row.addEventListener('dragend', () => {
+    dragging = null;
+    row.draggable = false;
+    row.classList.remove('dragging');
+  });
+  row.addEventListener('dragover', e => {
+    if (!dragging || dragging === s || !inSection(dragging)) return;
+    e.preventDefault();
+    const list = sources.filter(inSection);
+    row.classList.add(list.indexOf(dragging) < index ? 'drop-after' : 'drop-before');
+  });
+  row.addEventListener('dragleave', () => row.classList.remove('drop-before', 'drop-after'));
+  row.addEventListener('drop', e => {
+    e.preventDefault();
+    row.classList.remove('drop-before', 'drop-after');
+    if (dragging && dragging !== s && inSection(dragging)) moveTo(dragging, inSection, index);
+  });
+
+  const glyph = el('span', 'glyph');
+  glyph.append(svgIcon('i-search'));
+  const name = document.createElement('input');
+  name.type = 'text';
+  name.value = s.name;
+  name.placeholder = defaultName(s);
+  name.setAttribute('aria-label', `Name of ${s.name}`);
+  name.addEventListener('input', () => rename(s, name.value, false));
+  name.addEventListener('change', () => {
+    rename(s, name.value, true);
+    name.value = s.name;
+  });
+  name.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      name.blur();
+    }
+  });
+  const button = (symbol, label, action, onClick, disabled = false) => {
+    const b = iconButton(symbol, label, onClick);
+    b.dataset.action = action;
+    b.disabled = disabled;
+    return b;
+  };
+  row.append(handle, isTopic(s) ? glyph : mark(s.country, sourceLink(s)), name,
+      button('i-up', `Move ${s.name} up`, 'up', () => moveTo(s, inSection, index - 1, 'up'), index === 0),
+      button('i-down', `Move ${s.name} down`, 'down', () => moveTo(s, inSection, index + 1, 'down'), index === count - 1),
+      button('i-edit', `More settings for ${s.name}`, 'more', () => {
+        editFromList = true;
+        showEditOne(s);
+      }),
+      button('i-delete', `Stop following ${s.name}`, 'remove', () => { if (unfollow(s)) showEditList(); }));
+  return row;
+}
+
+/** A new name, saved as it is typed; an empty one, once done, gives back the original. */
+function rename(s, value, done) {
+  const name = value.trim();
+  if (!name && !done) return;
+  s.name = name || defaultName(s);
+  saveSources();
+  scheduleRebuild(); // the sidebar, and articles that show their source's name
+}
+
+function moveTo(s, inSection, to, keepFocusOn) {
+  const from = sources.filter(inSection).indexOf(s);
+  sources = moveWithin(sources, inSection, from, to);
+  saveSources();
+  renderSidebar();
+  // Keep a keyboard user on the arrow they pressed, unless the row reached the end it points to.
+  const list = sources.filter(inSection);
+  const at = list.indexOf(s);
+  const action = keepFocusOn === 'up' && at === 0 ? 'down' : keepFocusOn === 'down' && at === list.length - 1 ? 'up' : keepFocusOn;
+  showEditList(null, action ? { id: sid(s), action } : null);
+}
+
+/** A labelled form field. */
+function field(label, control, help) {
+  const wrap = el('label', 'field');
+  wrap.append(el('span', 'label', label), control);
+  if (help) wrap.append(el('span', 'help small', help));
+  return wrap;
+}
+
+function selectOf(id, options, value) {
+  const select = document.createElement('select');
+  select.id = id;
+  for (const [code, label] of options) select.append(new Option(label, code));
+  select.value = value;
+  return select;
+}
+
+/** All the settings of one topic or source. */
+function showEditOne(s) {
+  addMode = 'edit-one';
+  editing = s;
+  setStep(`Edit “${s.name}”`, 'Save', editFromList);
+  const form = el('div', 'form');
+  const name = dialogInput('text', 'edit-name', defaultName(s), confirmAdd);
+  name.value = s.name;
+  form.append(field('Name', name, 'Leave it empty for the original name.'));
+  const flags = [['', isTopic(s) ? '' : 'No flag (the site’s own icon)'],
+    ...FLAGS.map(code => [code, countryName(code)]).sort((a, b) => a[1].localeCompare(b[1]))];
+  let preview = null;
+  if (s.kind === 'topic') {
+    const topic = topicFields(s.q, topicEditions(s));
+    form.append(field('Words', topic.input), ...topic.fields.slice(1));
+    preview = topic.preview;
+  } else if (s.kind === 'news') {
+    const site = dialogInput('text', 'edit-site', 'example.com or example.com/section', confirmAdd);
+    site.value = s.site;
+    form.append(field('Site', site, 'Its headlines come through Google News (a site: search); a section such as theguardian.com/world works too.'),
+        field('Edition', selectOf('edit-edition', EDITIONS, s.edition)),
+        field('Flag', selectOf('edit-flag', flags, s.country || '')));
+  } else {
+    const url = dialogInput('url', 'edit-url', 'https://example.com/feed', confirmAdd);
+    url.value = s.url;
+    const langs = [['', 'As the feed says'], ...EDITION_LANGS];
+    if (s.lang && !langs.some(([code]) => code === s.lang)) langs.push([s.lang, languageName(s.lang)]);
+    form.append(field('Feed address', url, 'The RSS or Atom address it is read from.'),
+        field('Flag', selectOf('edit-flag', flags, s.country || '')),
+        field('Language', selectOf('edit-lang', langs, s.lang || ''), 'Used by the language filter above the list.'));
+  }
+  $('add-body').replaceChildren(form, ...(preview ? [preview] : []));
+  if (s.kind === 'topic') renderTopicLanguages();
+  name.focus();
+}
+
+/** Saves "More settings": in place, keeping its position; read again if what it reads changed. */
+async function saveEdit() {
+  const s = editing;
+  const i = sources.indexOf(s);
+  if (!s || i < 0) return showEditList();
+  const typed = $('edit-name').value.trim();
+  let entry;
+  if (s.kind === 'topic') {
+    const t = topicFromForm();
+    if (!t) return $('topic-q').focus();
+    // A name that was the words follows the words.
+    entry = { ...t, name: !typed || (typed === s.name && s.name === s.q) ? t.q : typed };
+  } else if (s.kind === 'news') {
+    const edition = $('edit-edition').value;
+    entry = sourceEntry({ kind: 'news', site: $('edit-site').value, edition, lang: edition.split('-')[0],
+      country: $('edit-flag').value || null, name: typed || s.name });
+    if (!entry) {
+      toast('That isn’t a site address');
+      return $('edit-site').focus();
+    }
+    if (!typed) entry.name = entry.site;
+  } else {
+    let url = $('edit-url').value.trim();
+    if (url && !/^https?:\/\//i.test(url)) url = 'https://' + url;
+    entry = sourceEntry({ kind: 'rss', url, lang: $('edit-lang').value || null, country: $('edit-flag').value || null,
+      name: typed || s.name });
+    if (!entry) {
+      toast('That isn’t a web address');
+      return $('edit-url').focus();
+    }
+    if (!typed) entry.name = url === s.url ? defaultName(s) : hostOf(url);
+  }
+  const oldId = sid(s), newId = sid(entry);
+  if (newId !== oldId && sources.some(x => sid(x) === newId)) return toast('You already follow that');
+  sources[i] = entry;
+  saveSources();
+  const [kind, viewId] = splitView(prefs.view);
+  if (viewId === oldId) {
+    prefs.view = `${kind}:${newId}`;
+    savePrefs();
+  }
+  if (editFromList) showEditList();
+  else $('add-dialog').close();
+  toast(`Saved ${entry.name}`);
+  if (newId !== oldId) {
+    loaded.delete(oldId);
+    await refresh([entry]);
+  } else {
+    rebuild();
+  }
+}
 
 // ---- export and import -------------------------------------------------------------------
 
@@ -1656,6 +1931,12 @@ async function start() {
   $('refresh').addEventListener('click', () => refresh());
   $('add-source').addEventListener('click', () => openAdd());
   $('add-topic').addEventListener('click', () => openAdd('topic'));
+  $('edit-topics').addEventListener('click', () => openEditor('topics'));
+  $('edit-sources').addEventListener('click', () => openEditor('sources'));
+  $('edit-view').addEventListener('click', () => {
+    const s = sourceById(splitView(prefs.view)[1]);
+    if (s) openEditOne(s);
+  });
   $('toggle-read').addEventListener('click', toggleRead);
   $('toggle-save').addEventListener('click', () => toggleSave());
   $('full-text').addEventListener('click', () => { const a = articleByKey(selectedKey); if (a) loadFullText(a); });
