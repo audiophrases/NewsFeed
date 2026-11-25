@@ -86,6 +86,10 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   only, the site refuses NewsFeed, found through Google News…). Articles a site marks for
   subscribers carry a **Subscriber article** tag. The length and subscriber flag come from the
   page's own JSON-LD description (`wordCount`, `articleBody`, `isAccessibleForFree`).
+  Reading an article from an outlet you don't follow yet (from a topic, a search or a saved
+  article), **+ Add source** next to its name adds that outlet. It finds the feeds on the outlet's
+  site and ticks the only one, or ticks the outlet's headlines via Google News when the site has
+  no feed NewsFeed can read. If the outlet's site isn't known, it searches by the outlet's name.
 - **Keep track** – read/unread, saved articles (kept even after they leave the feed), duplicate
   stories shown once, unread counts per source, refresh every 15 minutes.
 - **Keyboard** – `j`/`k` next/previous, `s` save, `m` read/unread, `o` open original,

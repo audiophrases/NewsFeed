@@ -741,6 +741,7 @@ function renderReaderState() {
   $('save-icon').setAttribute('href', saved.has(a.key) ? '#i-star' : '#i-star-o');
   $('toggle-save').classList.toggle('on', saved.has(a.key));
   $('toggle-save').setAttribute('aria-label', saved.has(a.key) ? 'Remove from saved' : 'Save');
+  if ($('add-outlet')) $('add-outlet').hidden = followsOutlet(a);
 }
 
 function renderReader(a) {
@@ -760,6 +761,15 @@ function renderReader(a) {
     time.title = age(a.publishedAt);
     meta.append(time);
   }
+  // From an outlet you don't follow (a topic's, a search's): one click to add it.
+  const add = el('button', 'add-outlet');
+  add.type = 'button';
+  add.id = 'add-outlet';
+  add.title = `Add ${a.sourceName} to your sources`;
+  add.append(svgIcon('i-add'), el('span', '', 'Add source'));
+  add.hidden = followsOutlet(a);
+  add.addEventListener('click', () => showOutlet(a));
+  meta.append(add);
   const status = el('p', 'r-status');
   status.id = 'reader-status';
   const parts = [meta, el('h2', '', a.title), status];
@@ -1357,6 +1367,122 @@ async function followSiteHeadlines(site) {
   if (await follow(entry)) setView('source:' + sid(entry));
 }
 
+// ---- adding the outlet of the article you're reading -----------------------------------------
+
+/**
+ * An article's outlet's home page: from Google News' word on its source, else the article's own
+ * address; null when neither names it (an aggregator's link not looked up yet).
+ */
+function outletHome(a) {
+  for (const link of [a.site, articleLink(a)]) {
+    try {
+      const u = new URL(link);
+      if (/^https?:$/.test(u.protocol) && !/(^|\.)(google|bing)\.com$/.test(u.hostname)) return u.origin;
+    } catch (e) {
+      // not an address
+    }
+  }
+  return null;
+}
+
+/** Two hosts of one site: the same, or one inside the other (edition.cnn.com and cnn.com). */
+const sameSite = (x, y) => x === y || x.endsWith('.' + y) || y.endsWith('.' + x);
+
+/** The hosts a source reads from: its feed's and its site's, or its Google News site's. */
+function sourceHosts(s) {
+  if (s.kind === 'news') return [s.site.split('/')[0].replace(/^www\./, '')];
+  return [hostOf(s.url), hostOf(loaded.get(sid(s))?.siteUrl || '')].filter(Boolean);
+}
+
+/** Whether you follow an article's outlet as a source (its feed or headlines), not just a topic. */
+function followsOutlet(a) {
+  const followed = sources.filter(s => s.kind !== 'topic');
+  if (followed.some(s => a.sids.includes(sid(s)))) return true;
+  const home = outletHome(a);
+  return Boolean(home) && followed.some(s => sourceHosts(s).some(h => sameSite(h, hostOf(home))));
+}
+
+/** Google News' edition for an outlet's headlines: its articles' language, in your country if it can. */
+const outletEdition = a => (a.lang && editionFor(a.lang.split('-')[0].toLowerCase(), defaultEdition().split('-')[1]))
+    || defaultEdition();
+
+/**
+ * A feed of an outlet, named for the sidebar: the outlet's name for its only feed, or for one whose
+ * title is that name with a tagline ("News from California, … - Los Angeles Times"); otherwise
+ * the feed's title, which names a section ("The Economist – Europe").
+ */
+function outletFeedName(outlet, f, only) {
+  const title = sourceTitle(f.site || outlet, f.title) || outlet;
+  const words = s => fold(s).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  const named = fold(title).includes(fold(outlet));
+  return only || (named && words(title).length - words(outlet).length > 3) ? outlet : title;
+}
+
+let outletRequest = 0;
+
+/**
+ * "Add source" in the reader: the feeds on the article's site to tick, and its headlines via
+ * Google News, ticked when the site has no feed NewsFeed can read. Without a site, a search by name.
+ */
+async function showOutlet(a) {
+  const home = outletHome(a);
+  if (!home) {
+    showGroups(a.sourceName);
+    if (!$('add-dialog').open) $('add-dialog').showModal();
+    return searchSources();
+  }
+  const host = hostOf(home);
+  const request = ++outletRequest;
+  addMode = 'outlet';
+  setStep(`Add ${a.sourceName}`, 'Add', false);
+  $('add-confirm').disabled = true;
+  const help = el('p', 'help', `Looking for feeds on ${host}…`);
+  const results = el('div');
+  $('add-body').replaceChildren(help, results);
+  if (!$('add-dialog').open) $('add-dialog').showModal();
+
+  let feeds = [], error = null;
+  try {
+    feeds = await getJson(`/api/discover?url=${encodeURIComponent(home)}`);
+  } catch (e) {
+    error = e.message;
+  }
+  if (addMode !== 'outlet' || request !== outletRequest) return;
+  $('add-confirm').disabled = false;
+  addCandidates = [
+    ...feeds.map(f => ({ kind: 'rss', url: f.url, name: outletFeedName(a.sourceName, f, feeds.length === 1),
+      lang: f.language, country: guessCountry(f.url, f.language) })),
+    sourceEntry({ kind: 'news', site: host, edition: outletEdition(a), name: a.sourceName, lang: a.lang }),
+  ];
+  const have = new Set(sources.map(sid));
+  results.replaceChildren(...addCandidates.map((s, i) => {
+    const row = el('label', 'choice');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.dataset.index = i;
+    const following = have.has(sid(s));
+    box.checked = following || (feeds.length === 1 ? i === 0 : !feeds.length && s.kind === 'news');
+    box.disabled = following;
+    const f = feeds[i];
+    const detail = following ? 'Following' : !f ? sourceDetail(s)
+      : [`${f.count} articles`, f.language ? languageName(f.language) : '', f.sample ? `“${f.sample}”` : hostOf(f.url)].filter(Boolean).join(' · ');
+    const name = el('span', 'name', s.name);
+    name.append(el('span', 'detail', detail));
+    row.append(box, mark(s.country, home), name);
+    return row;
+  }));
+  help.textContent = feeds.length > 1 ? `${host} has ${feeds.length} feeds. Tick the ones you want, then press Add.`
+    : feeds.length ? `Found ${host}’s feed. Press Add to follow it.`
+    : error ? `${host} doesn’t let NewsFeed look for its feeds (${error}), but its headlines can come through Google News.`
+    : `No feed found on ${host}, but its headlines can come through Google News.`;
+  const other = el('p', 'help');
+  other.append(button('primary-text', `Not this site? Search for “${a.sourceName}”`, () => {
+    showGroups(a.sourceName);
+    searchSources();
+  }));
+  results.append(other);
+}
+
 /**
  * A feed that refuses NewsFeed, swapped in place for its site's headlines via Google News (same
  * name and flag, the edition of its language and country).
@@ -1476,7 +1602,7 @@ function guessCountry(url, lang) {
 }
 
 async function confirmAdd() {
-  if (addMode === 'group' || addMode === 'found' || addMode === 'search') {
+  if (addMode === 'group' || addMode === 'found' || addMode === 'search' || addMode === 'outlet') {
     const picked = [...$('add-body').querySelectorAll('input:checked:not(:disabled)')]
         .map(box => addCandidates[Number(box.dataset.index)]);
     if (!picked.length) return toast('Pick at least one source');

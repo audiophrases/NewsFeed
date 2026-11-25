@@ -447,6 +447,25 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 
 .reader .r-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; color: var(--muted); font-size: 13px; }
 
+/* "Add source", for an article from an outlet you don't follow. */
+.reader .add-outlet {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 12px 0 8px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--chip);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.reader .add-outlet[hidden] { display: none; }
+
+.reader .add-outlet svg { width: 16px; height: 16px; }
+
 .reader h2 { margin: 10px auto 12px; font-size: clamp(22px, 2.6vw, 30px); line-height: 1.25; }
 
 /* How much of the article this is: full (checked), partial, can't be checked, summary only. */
