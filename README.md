@@ -63,8 +63,8 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   headline: in the site's feeds, among the links on its home page (some sites' feeds are years
   out of date), in its WordPress search feed and public search index, and in its sitemaps. If those
   miss, NewsFeed searches Bing News for the headline on the publisher's domain and checks the
-  result against the headline and outlet. NewsFeed also checks the publisher’s HTML search
-  results. When the server runs out of matches, the browser can check a publisher’s public
+  result against the headline and outlet. NewsFeed also reads HTML search results using a GET
+  search form advertised on the publisher’s home page. When the server runs out of matches, the browser can check a publisher’s public
   WordPress index directly. If the headlines differ, **Use a publisher link** lets you paste
   the article’s address. NewsFeed opens it in the reader and remembers it on that device.
 - **Edit** – the ✎ next to *Topics* or *Sources* lists everything you follow: type to rename

@@ -4,9 +4,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { sameHeadline, slugMatch, sitemapsInRobots, pickSitemaps, findInSitemap, siteLinks, findInLinks } = require('../lib/findarticle');
+const { sameHeadline, slugMatch, sitemapsInRobots, pickSitemaps, findInSitemap, siteLinks, siteSearchForm, findInLinks } = require('../lib/findarticle');
 
 const HEADLINE = 'Torredembarra s’adhereix a l’Associació per l’Impuls Metropolità del Camp de Tarragona';
+
+test('a publisher search uses a same-origin GET form with a query field', () => {
+  const html = `<template><form role="search" action="/template"><input name="q"></form></template>
+    <form action="https://elsewhere.example/search"><input type=search name=q></form>
+    <form method=POST action="/search"><input type=search name=q></form>
+    <form action="/newsletter"><input type=email name="email"></form>
+    <form role=search action="/cerca?lang=ca"><input name="terme" type=text></form>`;
+  assert.deepEqual(siteSearchForm(html, 'https://publisher.example/'), { url: 'https://publisher.example/cerca?lang=ca', name: 'terme' });
+});
 
 test('the same headline, punctuation, accents and case aside', () => {
   assert.ok(sameHeadline(HEADLINE, "Torredembarra s'adhereix a l'Associació per l'Impuls Metropolità del Camp de Tarragona"));

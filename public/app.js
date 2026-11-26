@@ -977,7 +977,7 @@ let knownLinks = new Map();
 const saveLinks = () => store(KEY_LINKS, [...knownLinks].slice(-LINKS_LIMIT));
 
 /** The article's own address when known (a topic's articles come as Google News links). */
-const articleLink = a => confirmedPublisherLink(a.link) || knownLinks.get(a.link) || a.link;
+const articleLink = a => confirmedPublisherLink(a.link, a) || knownLinks.get(a.link) || a.link;
 
 function rememberPublisher(a, address) {
   if (!isGoogleNews(a.link) || !canFetch(address) || isGoogleNews(address)) return;
@@ -1172,7 +1172,7 @@ const frameRefused = new Set();
 
 /** The extra parameters that let the server find a topic's article if Google News won't say. */
 const lookupParams = (a, link) => (isGoogleNews(link) && a.site
-  ? `&title=${encodeURIComponent(a.title)}&site=${encodeURIComponent(a.site)}` : '');
+  ? '&' + new URLSearchParams({ title: a.title, site: a.site, publishedAt: a.publishedAt || 0 }) : '');
 
 let readabilityLoad = null;
 

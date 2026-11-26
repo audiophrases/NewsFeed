@@ -7,9 +7,23 @@ const confirmedPublisherLinks = new Map([
     'https://www.diarilaveu.cat/societat/docents-acusen-orti-de-convertir-la-inspeccio-en-una-policia-ideologica-659514/'],
 ]);
 
-function confirmedPublisherLink(link) {
+// Some reported stories come with the publisher URL and feed metadata but no Google ID.
+const confirmedStories = [{
+  title: 'Un ferit greu i dos de lleus en incendiar-se un pis a Torredembarra (Tarragona)',
+  day: '2026-11-26',
+  url: 'https://www.aldia.cat/gent/noticia-ferit-greu-dos-lleus-incendiar-pis-torredembarra-tarragona-20261126182042.html',
+}];
+
+function confirmedPublisherLink(link, { title, site, publishedAt } = {}) {
   const id = /^https:\/\/news\.google\.com\/(?:rss\/)?(?:articles|read)\/([\w-]+)(?:[?#]|$)/.exec(link || '');
-  return id ? confirmedPublisherLinks.get(id[1]) || null : null;
+  if (!id) return null;
+  if (confirmedPublisherLinks.has(id[1])) return confirmedPublisherLinks.get(id[1]);
+  const date = new Date(Number(publishedAt));
+  if (!site || !title || !Number.isFinite(date.getTime())) return null;
+  const day = date.toISOString().slice(0, 10);
+  const story = confirmedStories.find(s => s.day === day && foldHeadline(s.title) === foldHeadline(title)
+      && publisherAddress(s.url, site));
+  return story?.url || null;
 }
 
 const foldHeadline = s => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')

@@ -17,6 +17,8 @@ const pageHits = {};
 /** What the stand-in Google News was asked: lookups it answered. */
 const lookups = [];
 const headline = 'La CADPV acusa la Conselleria de fer de la Inspecció una eina de censura';
+const aldiaTitle = 'Un ferit greu i dos de lleus en incendiar-se un pis a Torredembarra (Tarragona)';
+const aldiaPath = '/gent/noticia-ferit-greu-dos-lleus-incendiar-pis-torredembarra-tarragona-20261126182042.html';
 
 /** Stands in for Google News' article pages and the lookup they make (see lib/googlenews.js). */
 function googleNews(req, res, u) {
@@ -77,7 +79,8 @@ const site = http.createServer((req, res) => {
   // Asked for as localhost, the site is one without icons.
   if (req.url === '/' && /^localhost:/.test(req.headers.host)) {
     return res.end('<html><head><link rel="alternate" type="application/rss+xml" href="/local-feed.xml"></head>'
-        + '<body><p>No icons here.</p><a href="/story">The council approves the budget for next year</a></body></html>');
+        + '<body><form action="/cercador.aspx" method="get"><input type="search" name="buscar"></form>'
+        + '<p>No icons here.</p><a href="/story">The council approves the budget for next year</a></body></html>');
   }
   // That site's own feed, with a topic's article in it (found by its headline when Google won't say).
   if (req.url === '/local-feed.xml') {
@@ -91,6 +94,10 @@ const site = http.createServer((req, res) => {
     return res.end(PNG);
   }
   const u = new URL(req.url, siteUrl);
+  if (u.pathname === '/cercador.aspx' && u.searchParams.get('buscar') === 'ferit greu lleus incendiar') {
+    return res.end(`<a href="${aldiaPath}">${aldiaTitle}</a>`);
+  }
+  if (u.pathname === aldiaPath) return res.end(fs.readFileSync(path.join(FIXTURES, 'article.html')));
   if (u.pathname === '/wp-json/wp/v2/search') {
     const matches = u.searchParams.get('search') === 'CADPV';
     return res.end(JSON.stringify(matches ? [
@@ -421,6 +428,33 @@ test('the reported Diari La Veu link loads its confirmed publisher URL with Goog
   assert.equal(found.body.from, 'publisher-post');
   assert.match(found.body.blocks[0].text, /El professorat/);
   assert.equal(publisherReads, 1);
+});
+
+test('an outlet with its own search form finds a story missing from its feeds', async () => {
+  const site = 'http://localhost:' + new URL(siteUrl).port;
+  const result = await api('/api/article', { url: siteUrl + '/rss/articles/CBMiNoSignature_00000025', site, title: aldiaTitle });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.url, site + aldiaPath);
+});
+
+test('the Al Dia report uses the confirmed permalink for its outlet, headline and publication day', async t => {
+  const { confirmedPublisherLink } = require('../public/publisher');
+  const url = 'https://news.google.com/rss/articles/CBMiOpaqueLinkForFixture2026';
+  const publisher = 'https://www.aldia.cat' + aldiaPath;
+  const article = { site: 'https://aldia.cat', title: aldiaTitle, publishedAt: Date.parse('2026-11-26T17:20:42Z') };
+  assert.equal(confirmedPublisherLink(url, { ...article, publishedAt: article.publishedAt + 86400000 }), null);
+  assert.equal(confirmedPublisherLink(url, { ...article, site: 'https://other.example' }), null);
+  assert.equal(confirmedPublisherLink(url, { ...article, title: aldiaTitle + ' (actualització)' }), null);
+  const fetch = globalThis.fetch;
+  t.mock.method(globalThis, 'fetch', (input, options) => {
+    if (input !== publisher) return fetch(input, options);
+    return Promise.resolve(new Response('<article><p>Local test copy of the fire report from Torredembarra.</p></article>',
+        { headers: { 'content-type': 'text/html' } }));
+  });
+  const result = await api('/api/article', { url, ...article });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.url, publisher);
+  assert.match(result.body.blocks[0].text, /Torredembarra/);
 });
 
 test('a page for a reading view: fetched once with its article, scripts and styles left out', async () => {

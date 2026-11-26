@@ -286,7 +286,7 @@ let googlePausedUntil = 0;
  */
 async function articleAddress(link, site) {
   const id = googleLinks.articleId(link);
-  const inside = confirmedPublisherLink(link) || googleLinks.addressInside(id);
+  const inside = googleLinks.addressInside(id);
   if (inside) return inside;
   return inLookupSlot(async () => {
     if (Date.now() < googlePausedUntil) throw new FetchError('Google News isn’t answering NewsFeed’s lookups just now');
@@ -348,7 +348,9 @@ const sitemapsOf = origin => cached('sitemaps|' + origin, 30 * 60 * 1000, async 
 const homeOf = origin => cached('home|' + origin, 30 * 60 * 1000, async () => {
   const page = await getText(origin + '/', {}, 1024 * 1024);
   const feeds = feedLinks(page.text, page.url).filter(l => !isCommentsFeed(l)).map(l => l.url);
-  return { feeds: [...feeds.slice(0, 3), new URL('/feed/', page.url).href], links: onSite.siteLinks(page.text, page.url) };
+  const publisherHome = new URL(page.url).host.replace(/^www\./, '') === new URL(origin).host.replace(/^www\./, '');
+  return { feeds: [...feeds.slice(0, 3), new URL('/feed/', page.url).href], links: onSite.siteLinks(page.text, page.url),
+    searchForm: publisherHome ? onSite.siteSearchForm(page.text, page.url) : null };
 });
 
 /**
@@ -378,8 +380,17 @@ async function findOnSite(site, title) {
       .then(page => JSON.parse(page.text)).catch(() => null);
   const post = Array.isArray(results) && onSite.publisherResult(results, title, origin);
   if (post) return post;
-  const searchPage = await getText(origin + '/?s=' + encodeURIComponent(terms), PAGE_HEADERS, 1024 * 1024).catch(() => null);
-  if (searchPage) {
+  const searches = new Set();
+  if (home.searchForm) {
+    const native = new URL(home.searchForm.url);
+    native.searchParams.set(home.searchForm.name, terms);
+    native.hash = '';
+    searches.add(native.href);
+  }
+  searches.add(origin + '/?' + new URLSearchParams({ s: terms }));
+  for (const url of searches) {
+    const searchPage = await getText(url, PAGE_HEADERS, 1024 * 1024).catch(() => null);
+    if (!searchPage) continue;
     const links = onSite.siteLinks(searchPage.text, searchPage.url);
     const match = links.find(l => onSite.sameHeadline(l.text, title) && onSite.publisherAddress(l.url, origin));
     if (match) return match.url;
@@ -613,11 +624,12 @@ async function handle(req, res) {
     // For a topic's article, its headline and outlet's site, in case Google News won't say where it is.
     const title = (u.searchParams.get('title') || '').trim().slice(0, 300);
     const site = /^https?:\/\/[^\s]+$/i.test(u.searchParams.get('site') || '') ? u.searchParams.get('site') : null;
+    const publishedAt = u.searchParams.get('publishedAt');
     const article = u.pathname === '/api/article';
     return api(res, `${article ? 'article' : 'page'} ${url}`, async () => {
       // A topic's article: first where its Google News link leads (remembered), then the article.
       const address = isGoogleNewsLink(url)
-        ? await cached('link|' + url, LINK_CACHE_MS, () => locate(url, title, site))
+        ? confirmedPublisherLink(url, { title, site, publishedAt }) || await cached('link|' + url, LINK_CACHE_MS, () => locate(url, title, site))
         : url;
       return article ? cached('article|' + address, ARTICLE_CACHE_MS, () => readArticle(address)) : readerPage(address);
     });
