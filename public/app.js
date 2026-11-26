@@ -823,10 +823,12 @@ function renderReaderState() {
   $('toggle-save').classList.toggle('on', saved.has(a.key));
   $('toggle-save').setAttribute('aria-label', saved.has(a.key) ? 'Remove from saved' : 'Save');
   if ($('add-outlet')) $('add-outlet').hidden = followsOutlet(a);
+  renderSiteButton();
 }
 
 function renderReader(a) {
   $('reader').classList.add('has-article');
+  $('reader').classList.remove('site-view');
   $('open-original').href = articleLink(a) || '#';
   $('open-original').hidden = !a.link;
   renderReaderState();
@@ -868,7 +870,8 @@ function renderReader(a) {
   note.id = 'reader-note';
   parts.push(note);
   body.replaceChildren(...parts);
-  if (fullTexts.has(a.key)) showFullText(a, fullTexts.get(a.key));
+  if (siteShown.has(a.key)) showSite(a, siteShown.get(a.key));
+  else if (fullTexts.has(a.key)) showFullText(a, fullTexts.get(a.key));
   else if (refusals.has(a.key)) {
     setStatus('summary', shownSoFar(a), refusals.get(a.key));
     readerActions(a, '', undefined, false);
@@ -966,6 +969,13 @@ const hostOf = link => { try { return new URL(link).hostname.replace(/^www\./, '
 
 async function loadFullText(a) {
   if (!a.link || !canFetch(a.link)) return;
+  // Asked for the text while the site's page shows: back to the reader, which loads it.
+  if (siteShown.has(a.key)) {
+    siteShown.delete(a.key);
+    if (fullTexts.has(a.key) || !prefs.fullText) return renderReader(a);
+    $('reader').classList.remove('site-view');
+    renderSiteButton();
+  }
   const note = $('reader-note');
   if (note) note.replaceChildren();
   const link = articleLink(a);
@@ -974,8 +984,7 @@ async function loadFullText(a) {
   try {
     // A Google News link comes with its headline and outlet, to find it on the outlet's site
     // if Google won't say where it leads.
-    const extra = isGoogleNews(link) && a.site ? `&title=${encodeURIComponent(a.title)}&site=${encodeURIComponent(a.site)}` : '';
-    result = await getJson(`/api/article?url=${encodeURIComponent(link)}${extra}`);
+    result = await getJson(`/api/article?url=${encodeURIComponent(link)}${lookupParams(a, link)}`);
   } catch (e) {
     if (selectedKey === a.key) {
       const why = explainFailure(e.message, a.sourceName);
@@ -984,6 +993,8 @@ async function loadFullText(a) {
       if (final) refusals.set(a.key, why);
       setStatus('summary', shownSoFar(a), why);
       readerActions(a, '', undefined, !final);
+      // NewsFeed's server was refused or got nothing, but your browser may still be let in.
+      if (siteMayShow(a, e.message)) showSite(a, why);
     }
     return;
   }
@@ -1010,10 +1021,11 @@ function showFullText(a, result) {
   const summaryLength = (a.summary || '').length;
   const fullLength = result.blocks.reduce((n, b) => n + b.text.length, 0);
   if (!text || fullLength < Math.max(300, summaryLength * 1.2)) {
-    setStatus('summary', shownSoFar(a), subscriber
-      ? `the page has no more of this subscriber article for NewsFeed`
-      : `${site} didn’t share more than this`, subscriber);
+    const why = subscriber ? 'The page has no more of this subscriber article for NewsFeed.'
+      : `${site} didn’t share more than this with NewsFeed.`;
+    setStatus('summary', shownSoFar(a), why.replace(/^The/, 'the').replace(/\.$/, ''), subscriber);
     readerActions(a);
+    fallbackFromPage(a, result, why);
     return;
   }
   const out = [];
@@ -1043,6 +1055,249 @@ function showFullText(a, result) {
     setStatus('unknown', 'Text from the page', `${minutes} · ${site} doesn’t say how long the article is, so it can’t be checked for completeness`);
     readerActions(a);
   }
+}
+
+// ---- when NewsFeed can't get the article's text ------------------------------------------
+//
+// Two ways on. When the server has the page but found little article text in it (it is built
+// in a way the extraction doesn't know), the browser makes a reading view of it with Mozilla's
+// Readability, as Firefox's Reader View does: only the article, its pictures and links. When
+// the server can't get the page at all, or the reading view has nothing either, the reader shows
+// the site's own page in a frame: your browser loads it, as if you opened it, which many sites
+// allow when they turn NewsFeed's server away. A page in a frame stays the site's own: another
+// site's page can't be reformatted from outside it, so it is shown as is.
+
+/** Reading views by article key: a promise of the view, or of null when the page has none. */
+const readingViews = new Map();
+/** Articles showing their site's page, by key: why (or '' when you asked for it). */
+const siteShown = new Map();
+/** Articles whose site says other sites may not show its pages. */
+const frameRefused = new Set();
+
+/** The extra parameters that let the server find a topic's article if Google News won't say. */
+const lookupParams = (a, link) => (isGoogleNews(link) && a.site
+  ? `&title=${encodeURIComponent(a.title)}&site=${encodeURIComponent(a.site)}` : '');
+
+let readabilityLoad = null;
+
+/** Mozilla's Readability, loaded the first time a page needs it. */
+function loadReadability() {
+  if (window.Readability) return Promise.resolve();
+  if (!readabilityLoad) {
+    readabilityLoad = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = '/vendor/readability/Readability.js';
+      script.onload = resolve;
+      script.onerror = () => {
+        readabilityLoad = null;
+        reject(new Error('The reading view couldn’t be loaded'));
+      };
+      document.head.append(script);
+    });
+  }
+  return readabilityLoad;
+}
+
+/** The article's reading view: { content, url, words, frameable }, or null if the page has too little. */
+function makeReadingView(a) {
+  if (!readingViews.has(a.key)) {
+    const link = articleLink(a);
+    const made = Promise.all([getJson(`/api/page?url=${encodeURIComponent(link)}${lookupParams(a, link)}`), loadReadability()])
+        .then(([page]) => {
+          if (page.frameable === false) frameRefused.add(a.key);
+          // A parsed document is inert: nothing in it runs or loads.
+          const doc = new DOMParser().parseFromString(page.html, 'text/html');
+          const base = doc.createElement('base');
+          base.href = page.url;
+          doc.head.prepend(base);
+          const parsed = new window.Readability(doc, { charThreshold: 300 }).parse();
+          const text = parsed && (parsed.textContent || '').replace(/\s+/g, ' ').trim();
+          if (!text || text.length < Math.max(300, (a.summary || '').length * 1.2)) return null;
+          return { content: parsed.content, url: page.url, words: text.split(' ').length };
+        });
+    made.catch(() => readingViews.delete(a.key));
+    readingViews.set(a.key, made);
+  }
+  return readingViews.get(a.key);
+}
+
+/** Tags a reading view keeps (others give up their text and keep nothing else), and renamed ones. */
+const READING_TAGS = new Set(['p', 'h3', 'h4', 'h5', 'ul', 'ol', 'li', 'blockquote', 'figure', 'figcaption', 'img',
+  'a', 'em', 'i', 'strong', 'b', 'u', 's', 'sub', 'sup', 'br', 'hr', 'pre', 'code', 'table', 'thead', 'tbody',
+  'tfoot', 'tr', 'th', 'td', 'caption', 'dl', 'dt', 'dd', 'small', 'mark', 'q', 'cite', 'abbr']);
+const READING_RENAME = { h1: 'h3', h2: 'h3', h3: 'h4', h4: 'h5', h5: 'h5', h6: 'h5' };
+/** Tags dropped with everything in them. */
+const READING_DROP = new Set(['script', 'style', 'iframe', 'frame', 'object', 'embed', 'form', 'input', 'button',
+  'select', 'textarea', 'svg', 'math', 'video', 'audio', 'canvas', 'noscript', 'template', 'link', 'meta', 'base', 'dialog']);
+
+const webUrl = (value, base) => {
+  try {
+    const u = new URL(value, base);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.href : null;
+  } catch (e) {
+    return null;
+  }
+};
+
+/**
+ * Readability's article as new elements of this page: rebuilt tag by tag from a list of allowed
+ * ones, with only addresses (http and https) and table spans carried over, so nothing of the
+ * page's own (scripts, handlers, styles, forms) can come along.
+ */
+function readingNodes(parent, base) {
+  const out = [];
+  for (const node of parent.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      out.push(document.createTextNode(node.data));
+      continue;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) continue;
+    const tag = READING_RENAME[node.localName] || node.localName;
+    if (READING_DROP.has(tag)) continue;
+    if (tag === 'img') {
+      const src = webUrl(node.getAttribute('src') || (node.getAttribute('srcset') || '').trim().split(/\s+/)[0], base);
+      if (!src || node.getAttribute('width') === '1' || node.getAttribute('height') === '1') continue;
+      const img = el('img');
+      img.src = src;
+      img.alt = node.getAttribute('alt') || '';
+      img.loading = 'lazy';
+      img.referrerPolicy = 'no-referrer';
+      img.addEventListener('error', () => img.remove());
+      out.push(img);
+      continue;
+    }
+    const children = readingNodes(node, base);
+    if (!READING_TAGS.has(tag)) {
+      out.push(...children);
+      continue;
+    }
+    if (tag === 'a') {
+      const href = webUrl(node.getAttribute('href') || '', base);
+      if (!href) {
+        out.push(...children);
+        continue;
+      }
+      const link = el('a');
+      link.href = href;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.append(...children);
+      out.push(link);
+      continue;
+    }
+    // Empty paragraphs and headings are what's left of page furniture.
+    if (/^(p|h\d|li|figure|figcaption)$/.test(tag) && !children.some(c => c.nodeName === 'IMG' || c.querySelector?.('img'))
+        && !children.map(c => c.textContent).join('').trim()) continue;
+    const copy = el(tag);
+    for (const name of ['colspan', 'rowspan']) {
+      if (/^\d{1,2}$/.test(node.getAttribute(name) || '')) copy.setAttribute(name, node.getAttribute(name));
+    }
+    copy.append(...children);
+    out.push(copy);
+  }
+  return out;
+}
+
+const sameImage = (x, y) => !!x && !!y && x.split('?')[0] === y.split('?')[0];
+
+/** Ad labels (in the built-in sources' languages) and copyright lines that come along with an article. */
+const READING_LABEL = /^(advertisement|advertising|sponsored|publicitat|publicidad|anuncio|werbung|anzeige|publicit[ée]|pubblicit[àa]|publicidade|advertentie)\b|^(©|copyright\b)/i;
+const labelOnly = node => !!node && !node.querySelector?.('img') && node.textContent.trim().length < 200
+    && READING_LABEL.test(node.textContent.trim());
+
+function showReadingView(a, view) {
+  const text = $('reader-text');
+  if (!text) return;
+  const doc = new DOMParser().parseFromString(view.content, 'text/html');
+  text.replaceChildren(...readingNodes(doc.body, view.url));
+  // The headline and picture the reader already shows, not twice.
+  const heading = text.querySelector('h3, h4');
+  if (heading && titleKey(heading.textContent) === titleKey(a.title) && !heading.previousElementSibling?.textContent.trim()) heading.remove();
+  const first = text.querySelector('img');
+  if (first && sameImage(first.src, a.image)) (first.closest('figure') || first).remove();
+  while (labelOnly(text.firstElementChild)) text.firstElementChild.remove();
+  while (labelOnly(text.lastElementChild)) text.lastElementChild.remove();
+  for (const p of text.querySelectorAll('p')) if (p.textContent.trim().length <= 30 && labelOnly(p)) p.remove();
+  const host = hostOf(view.url) || a.sourceName;
+  setStatus('unknown', 'Reading view',
+      `${Math.max(1, Math.round(view.words / 230))} min read · ${host}’s page with everything but the article left out; it can’t be checked for completeness`);
+  readerActions(a);
+}
+
+/** The article's address for a frame: a web page (not Google News), https when NewsFeed is. */
+function siteAddress(a) {
+  const link = articleLink(a);
+  if (!/^https?:\/\//i.test(link || '') || isGoogleNews(link)) return null;
+  return location.protocol === 'https:' ? link.replace(/^http:/i, 'https:') : link;
+}
+
+/** After a failed load: whether the site's page is worth showing (not gone, not unknown, not forbidden). */
+const siteMayShow = (a, message) => !!siteAddress(a) && !frameRefused.has(a.key)
+    && !/HTTP 4(04|10)|Not a web|private network|Google News/.test(message);
+
+function showSite(a, why = '') {
+  const address = siteAddress(a);
+  const text = $('reader-text');
+  if (!address || !text) return;
+  siteShown.set(a.key, why);
+  $('reader').classList.add('site-view');
+  const frame = el('iframe', 'site-frame');
+  frame.src = address;
+  frame.title = `${a.sourceName}: ${a.title}`;
+  frame.referrerPolicy = 'no-referrer';
+  // The page runs as on its own site, but can't take NewsFeed's place (pages in frames often try).
+  frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox');
+  frame.setAttribute('allow', 'fullscreen');
+  text.replaceChildren(frame);
+  const host = hostOf(address) || a.sourceName;
+  setStatus('site', 'The site’s own page', `${why ? why + ' ' : ''}Shown here as ${host} shows it.`);
+  readerActions(a, `If it stays blank, ${host} doesn’t let other sites show its pages: open it on the site.`,
+      undefined, !refusals.has(a.key));
+  renderSiteButton();
+}
+
+/** Reading view when the server's page allows one; the site's page when not (or subscribers only). */
+async function fallbackFromPage(a, result, why) {
+  if (result.frameable === false) frameRefused.add(a.key);
+  if (!(result.completeness && result.completeness.subscriber)) {
+    setStatus('loading', 'Making a reading view of the page…');
+    let view = null;
+    try {
+      view = await makeReadingView(a);
+    } catch (e) {
+      // the page is gone or refused now; the site's page is the way left
+    }
+    if (selectedKey !== a.key || siteShown.has(a.key)) return;
+    if (view) return showReadingView(a, view);
+  }
+  if (selectedKey !== a.key) return;
+  if (siteAddress(a) && !frameRefused.has(a.key)) return showSite(a, why);
+  setStatus('summary', shownSoFar(a), `${why.replace(/\.$/, '')}, and ${a.sourceName} doesn’t let other sites show its pages`);
+  readerActions(a);
+}
+
+/** The reader bar's site button: shows the site's page, or goes back to the reader. */
+function toggleSite() {
+  const a = selectedKey && articleByKey(selectedKey);
+  if (!a) return;
+  if (siteShown.has(a.key)) {
+    siteShown.delete(a.key);
+    renderReader(a);
+  } else if (!siteAddress(a)) {
+    toast(a.link && isGoogleNews(articleLink(a)) ? 'Its address isn’t known yet: load the full text first' : 'This article has no web page');
+  } else if (frameRefused.has(a.key)) {
+    toast(`${a.sourceName} doesn’t let other sites show its pages`);
+  } else {
+    showSite(a);
+  }
+  renderSiteButton();
+}
+
+function renderSiteButton() {
+  const on = !!selectedKey && siteShown.has(selectedKey);
+  $('view-site').classList.toggle('on', on);
+  $('view-site').setAttribute('aria-pressed', String(on));
+  $('view-site').title = on ? 'Back to the reader (w)' : 'Show the site’s page here (w)';
 }
 
 function toggleRead() {
@@ -2462,7 +2717,7 @@ function onKey(e) {
   const a = selectedKey && articleByKey(selectedKey);
   const actions = {
     j: () => step(1), ArrowDown: () => step(1), k: () => step(-1), ArrowUp: () => step(-1),
-    s: () => toggleSave(), m: toggleRead, r: () => refresh(), f: () => a && loadFullText(a),
+    s: () => toggleSave(), m: toggleRead, r: () => refresh(), f: () => a && loadFullText(a), w: toggleSite,
     o: () => a && a.link && window.open(articleLink(a), '_blank', 'noopener'),
     '/': () => $('q').focus(), Escape: closeReader,
   };
@@ -2549,6 +2804,7 @@ async function start() {
   $('toggle-read').addEventListener('click', toggleRead);
   $('toggle-save').addEventListener('click', () => toggleSave());
   $('full-text').addEventListener('click', () => { const a = articleByKey(selectedKey); if (a) loadFullText(a); });
+  $('view-site').addEventListener('click', toggleSite);
   $('close-reader').addEventListener('click', closeReader);
   $('home').addEventListener('click', e => { e.preventDefault(); setView('all'); });
   $('menu').addEventListener('click', () => { document.body.classList.add('drawer'); $('scrim').hidden = false; });

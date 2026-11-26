@@ -387,12 +387,54 @@ async function locate(link, title, site) {
   }
 }
 
+// ---- article pages -----------------------------------------------------------------------
+//
+// An article page is fetched once for both of its uses: the text NewsFeed extracts itself
+// (/api/article) and, when that falls short, the page for the browser to make a reading view of
+// (/api/page). Pages are large, so only the last few are kept, briefly.
+
+const PAGE_CACHE_MS = 10 * 60 * 1000;
+const PAGE_CACHE_SIZE = 20;
+/** What a browser asks for when it opens a page; some sites turn away requests that don't. */
+const PAGE_HEADERS = { Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' };
+/** Most of a page the browser is sent for its reading view (scripts and styles are left out first). */
+const PAGE_MAX_CHARS = 3 * 1024 * 1024;
+const pages = new Map();
+
+function fetchPage(url) {
+  const hit = pages.get(url);
+  if (hit && Date.now() - hit.at < PAGE_CACHE_MS) return hit.promise;
+  const promise = getText(url, PAGE_HEADERS).then(page => {
+    if (!/html/i.test(page.type) && !/<html|<body|<p[\s>]/i.test(page.text.slice(0, 5000))) {
+      throw new Error('Not a web page');
+    }
+    return page;
+  });
+  pages.delete(url);
+  pages.set(url, { at: Date.now(), promise });
+  promise.catch(() => { if (pages.get(url)?.promise === promise) pages.delete(url); });
+  if (pages.size > PAGE_CACHE_SIZE) pages.delete(pages.keys().next().value);
+  return promise;
+}
+
 async function readArticle(url) {
-  const page = await getText(url);
-  if (!/html/i.test(page.type) && !/<html|<body|<p[\s>]/i.test(page.text.slice(0, 5000))) {
-    throw new Error('Not a web page');
-  }
-  return extractArticle(page.text, page.url);
+  const page = await fetchPage(url);
+  return { ...extractArticle(page.text, page.url), frameable: page.frameable };
+}
+
+/**
+ * The page for a reading view made in the browser: its HTML without scripts (but with the
+ * article data some pages describe themselves with), styles and inline drawings. Sent as JSON
+ * text, never served as a page of NewsFeed's.
+ */
+async function readerPage(url) {
+  const page = await fetchPage(url);
+  const html = page.text
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/<script\b([^>]*)>[\s\S]*?<\/script>/gi, (m, attrs) => (/application\/ld\+json/i.test(attrs) ? m : ''))
+      .replace(/<(style|svg|template)\b[\s\S]*?<\/\1>/gi, '')
+      .slice(0, PAGE_MAX_CHARS);
+  return { url: page.url, html, frameable: page.frameable };
 }
 
 // ---- HTTP --------------------------------------------------------------------------------
@@ -476,18 +518,19 @@ async function handle(req, res) {
     });
   }
 
-  if (u.pathname === '/api/article') {
+  if (u.pathname === '/api/article' || u.pathname === '/api/page') {
     const url = webAddress(u);
     if (!url) return json(res, 400, { error: 'Not a web address' });
     // For a topic's article, its headline and outlet's site, in case Google News won't say where it is.
     const title = (u.searchParams.get('title') || '').trim().slice(0, 300);
     const site = /^https?:\/\/[^\s]+$/i.test(u.searchParams.get('site') || '') ? u.searchParams.get('site') : null;
-    return api(res, `article ${url}`, async () => {
+    const article = u.pathname === '/api/article';
+    return api(res, `${article ? 'article' : 'page'} ${url}`, async () => {
       // A topic's article: first where its Google News link leads (remembered), then the article.
       const address = isGoogleNewsLink(url)
         ? await cached('link|' + url, LINK_CACHE_MS, () => locate(url, title, site))
         : url;
-      return cached('article|' + address, ARTICLE_CACHE_MS, () => readArticle(address));
+      return article ? cached('article|' + address, ARTICLE_CACHE_MS, () => readArticle(address)) : readerPage(address);
     });
   }
 

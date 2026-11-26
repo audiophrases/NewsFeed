@@ -7,7 +7,7 @@ const path = require('path');
 
 const { parseFeed, feedLinks, looksLikeFeed } = require('../lib/feeds');
 const { extractArticle } = require('../lib/article');
-const { isPrivateAddress } = require('../lib/fetch');
+const { isPrivateAddress, frameAllowed } = require('../lib/fetch');
 
 const fixture = name => fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8');
 
@@ -90,4 +90,16 @@ test('private addresses are recognised', () => {
     assert.ok(isPrivateAddress(ip), ip);
   }
   for (const ip of ['8.8.8.8', '172.32.0.1', '2a00:1450::1']) assert.ok(!isPrivateAddress(ip), ip);
+});
+
+test('frame permission from X-Frame-Options and frame-ancestors', () => {
+  const allowed = h => frameAllowed(new Headers(h));
+  assert.equal(allowed({}), true);
+  assert.equal(allowed({ 'X-Frame-Options': 'DENY' }), false);
+  assert.equal(allowed({ 'X-Frame-Options': 'SAMEORIGIN' }), false);
+  assert.equal(allowed({ 'Content-Security-Policy': "default-src 'self'" }), true);
+  assert.equal(allowed({ 'Content-Security-Policy': "frame-ancestors 'none'" }), false);
+  assert.equal(allowed({ 'Content-Security-Policy': "script-src 'self'; frame-ancestors 'self' https://partner.example" }), false);
+  assert.equal(allowed({ 'Content-Security-Policy': 'frame-ancestors *' }), true);
+  assert.equal(allowed({ 'Content-Security-Policy': 'upgrade-insecure-requests; frame-ancestors https:' }), true);
 });

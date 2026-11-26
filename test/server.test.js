@@ -12,6 +12,8 @@ const path = require('path');
 const { server } = require('../server');
 
 const FIXTURES = path.join(__dirname, 'fixtures');
+/** Article pages fetched from the site, by path. */
+const pageHits = {};
 /** What the stand-in Google News was asked: lookups it answered. */
 const lookups = [];
 
@@ -54,6 +56,14 @@ const site = http.createServer((req, res) => {
     '/story': ['article.html', 'text/html; charset=utf-8'],
     '/comments/feed/': ['rss.xml', 'application/rss+xml'],
   };
+  // An article written in <div>s, in three framing policies; how often each was fetched.
+  const framing = { '/divs': {}, '/divs-noframe': { 'X-Frame-Options': 'SAMEORIGIN' },
+    '/divs-anyone': { 'Content-Security-Policy': "default-src 'self'; frame-ancestors *" } }[req.url];
+  if (framing) {
+    pageHits[req.url] = (pageHits[req.url] || 0) + 1;
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', ...framing });
+    return res.end(fs.readFileSync(path.join(FIXTURES, 'divs-article.html')));
+  }
   if (req.url === '/moved') {
     res.writeHead(301, { Location: '/rss.xml' });
     return res.end();
@@ -324,4 +334,28 @@ test('when Google News won\'t say, the article is found on its own site by its h
   assert.equal(missing.status, 502);
   assert.match(missing.body.error,
       /isn’t answering NewsFeed’s lookups just now, and localhost doesn’t list it on its home page, in its feeds or in its sitemaps/);
+});
+
+test('a page for a reading view: fetched once with its article, scripts and styles left out', async () => {
+  const article = await api('/api/article', { url: siteUrl + '/divs' });
+  assert.equal(article.status, 200);
+  assert.equal(article.body.frameable, true);
+  assert.ok(article.body.words < 60, 'text in <div>s is more than the extraction finds: the reading view is for this');
+  const { status, body } = await api('/api/page', { url: siteUrl + '/divs' });
+  assert.equal(status, 200);
+  assert.equal(pageHits['/divs'], 1, 'the page fetched for the article is reused');
+  assert.equal(body.url, siteUrl + '/divs');
+  assert.equal(body.frameable, true);
+  assert.match(body.html, /The fishing harbour reopened on Monday morning/);
+  assert.match(body.html, /application\/ld\+json/, 'the article data pages describe themselves with stays');
+  assert.doesNotMatch(body.html, /window\.analytics|document\.write|<style|<svg/);
+});
+
+test('whether a site lets its pages be shown in a frame', async () => {
+  assert.equal((await api('/api/article', { url: siteUrl + '/divs-noframe' })).body.frameable, false);
+  assert.equal((await api('/api/page', { url: siteUrl + '/divs-noframe' })).body.frameable, false);
+  assert.equal((await api('/api/page', { url: siteUrl + '/divs-anyone' })).body.frameable, true);
+  const gone = await api('/api/page', { url: siteUrl + '/no-such-page' });
+  assert.equal(gone.status, 502);
+  assert.equal(gone.body.error, 'HTTP 404');
 });

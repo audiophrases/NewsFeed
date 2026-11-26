@@ -87,6 +87,18 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   only, the site refuses NewsFeed, found through Google News…). Articles a site marks for
   subscribers carry a **Subscriber article** tag. The length and subscriber flag come from the
   page's own JSON-LD description (`wordCount`, `articleBody`, `isAccessibleForFree`).
+- **When the text can't be had** – two ways on, tried in this order:
+  - **Reading view**: when NewsFeed's server gets the page but finds little article text in it,
+    the browser makes a reading view of the page with [Mozilla's Readability](https://github.com/mozilla/readability)
+    (the engine of Firefox's Reader View, in `public/vendor/readability`): only the article, with
+    its pictures, captions, lists and links, in NewsFeed's own type and colours. It is rebuilt from
+    a list of allowed tags, so nothing of the page's own (scripts, styles, forms, handlers) comes along.
+  - **The site's own page**: when the server can't get the page (many sites turn away servers
+    but not readers), or the reading view has nothing either, the reader shows the article's page
+    in a frame, loaded by your browser as if you had opened it. It can't be reformatted (browsers
+    don't let one site change another's page) and stays in NewsFeed (it can't take over the tab).
+    Sites that forbid frames (`X-Frame-Options`, CSP `frame-ancestors`) get a link instead.
+  - The 🌐 button (or `w`) switches any article to its site's page and back.
   Reading an article from an outlet you don't follow yet (from a topic, a search or a saved
   article), **+ Add source** next to its name adds that outlet. It finds the feeds on the outlet's
   site and ticks the only one, or ticks the outlet's headlines via Google News when the site has
@@ -95,7 +107,7 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   stories shown once, unread counts per source, refresh every 15 minutes, or pull the list
   down on a phone to update it now.
 - **Keyboard** – `j`/`k` next/previous, `s` save, `m` read/unread, `o` open original,
-  `f` full text, `/` search, `r` refresh.
+  `f` full text, `w` the site's page, `/` search, `r` refresh.
 - **Export / Import** – your sources, topics and saved articles as JSON; OPML from other feed
   readers can be imported too.
 - **Sync** – sign in with Google (PinPlay's sign-in) on each of your devices, and what you follow,
@@ -148,6 +160,7 @@ own. To set it up:
 | `GET /api/discover?url=` | feeds a site offers |
 | `GET /api/icon?url=` | the icon of that address's site (cached a day; 404 if it has none) |
 | `GET /api/article?url=` | an article's readable text and how complete it is (a Google News link is looked up first) |
+| `GET /api/page?url=` | an article's page without scripts or styles, for the browser's reading view, and whether it may be framed |
 
 The server won't fetch addresses on your local network (so a page can't use it to reach your
 router etc.). Set `ALLOW_PRIVATE=1` if you want to read feeds hosted on your own network.

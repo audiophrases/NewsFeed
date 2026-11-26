@@ -27,6 +27,7 @@
     <symbol id="i-down" viewBox="0 0 24 24"><path d="M7.41,8.59L12,13.17l4.59,-4.58L18,10l-6,6 -6,-6z"/></symbol>
     <symbol id="i-drag" viewBox="0 0 24 24"><path d="M11,18a2,2 0 1 1 -4,0 2,2 0 0 1 4,0zM9,10a2,2 0 1 0 0,4 2,2 0 0 0 0,-4zM9,4a2,2 0 1 0 0,4 2,2 0 0 0 0,-4zM15,8a2,2 0 1 0 0,-4 2,2 0 0 0 0,4zM15,10a2,2 0 1 0 0,4 2,2 0 0 0 0,-4zM15,16a2,2 0 1 0 0,4 2,2 0 0 0 0,-4z"/></symbol>
     <symbol id="i-delete" viewBox="0 0 24 24"><path d="M6,19a2,2 0 0 0 2,2h8a2,2 0 0 0 2,-2V7H6v12zM19,4h-3.5l-1,-1h-5l-1,1H5v2h14V4z"/></symbol>
+    <symbol id="i-web" viewBox="0 0 24 24"><path d="M12,2a10,10 0 1 0 0,20 10,10 0 0 0 0,-20zM18.92,8h-2.95a15.65,15.65 0 0 0 -1.38,-3.56A8.03,8.03 0 0 1 18.92,8zM12,4.04c.83,1.2 1.48,2.53 1.91,3.96h-3.82c.43,-1.43 1.08,-2.76 1.91,-3.96zM4.26,14A8.2,8.2 0 0 1 4,12c0,-.69 .1,-1.36 .26,-2h3.38c-.08,.66 -.14,1.32 -.14,2s.06,1.34 .14,2H4.26zM5.08,16h2.95c.32,1.25 .78,2.45 1.38,3.56A7.99,7.99 0 0 1 5.08,16zM8.03,8H5.08a7.99,7.99 0 0 1 4.33,-3.56A15.65,15.65 0 0 0 8.03,8zM12,19.96c-.83,-1.2 -1.48,-2.53 -1.91,-3.96h3.82c-.43,1.43 -1.08,2.76 -1.91,3.96zM14.34,14H9.66c-.09,-.66 -.16,-1.32 -.16,-2s.07,-1.35 .16,-2h4.68c.09,.65 .16,1.32 .16,2s-.07,1.34 -.16,2zM14.59,19.56c.6,-1.11 1.06,-2.31 1.38,-3.56h2.95a8.03,8.03 0 0 1 -4.33,3.56zM16.36,14c.08,-.66 .14,-1.32 .14,-2s-.06,-1.34 -.14,-2h3.38c.16,.64 .26,1.31 .26,2s-.1,1.36 -.26,2h-3.38z"/></symbol>
     <symbol id="i-text" viewBox="0 0 24 24"><path d="M14,17H4v2h10v-2zM20,9H4v2h16V9zM4,15h16v-2H4v2zM4,5v2h16V5H4z"/></symbol>
   </svg>
 
@@ -101,6 +102,7 @@
         <button id="close-reader" class="icon narrow-only" aria-label="Back to the list"><svg><use href="#i-back"/></svg></button>
         <span class="spacer"></span>
         <button id="full-text" class="icon" aria-label="Full text" title="Load the full article (f)"><svg><use href="#i-text"/></svg></button>
+        <button id="view-site" class="icon" aria-label="The site’s page" aria-pressed="false" title="Show the site’s page here (w)"><svg><use href="#i-web"/></svg></button>
         <button id="toggle-read" class="icon" aria-label="Mark unread" title="Mark read / unread (m)"><svg><use href="#i-dot"/></svg></button>
         <button id="toggle-save" class="icon" aria-label="Save" title="Save for later (s)"><svg><use id="save-icon" href="#i-star-o"/></svg></button>
         <a id="open-original" class="icon" target="_blank" rel="noopener noreferrer" aria-label="Open original" title="Open original (o)"><svg><use href="#i-open"/></svg></a>
@@ -110,7 +112,7 @@
           <img src="/icon.svg" alt="">
           <p>Pick an article to read it here.</p>
           <p class="keys"><kbd>j</kbd> <kbd>k</kbd> next / previous · <kbd>s</kbd> save · <kbd>m</kbd> read / unread ·
-            <kbd>o</kbd> original · <kbd>f</kbd> full text · <kbd>/</kbd> search · <kbd>r</kbd> refresh</p>
+            <kbd>o</kbd> original · <kbd>f</kbd> full text · <kbd>w</kbd> the site’s page · <kbd>/</kbd> search · <kbd>r</kbd> refresh</p>
         </div>
       </div>
     </article>

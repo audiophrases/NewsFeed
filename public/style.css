@@ -535,6 +535,43 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 
 .reader .text ul { padding-left: 20px; }
 
+/* A reading view made from the page: its pictures, captions, links and tables too. */
+.reader .text ol { padding-left: 24px; }
+
+.reader .text h4, .reader .text h5 { font-size: 17px; margin: 1.3em 0 .4em; }
+
+.reader .text a { color: var(--accent); }
+
+.reader .text img { display: block; max-width: 100%; height: auto; margin: 0 auto 1em; border-radius: 8px; }
+
+.reader .text figure { margin: 0 0 1.2em; }
+
+.reader .text figure img { margin-bottom: .4em; }
+
+.reader .text figcaption { color: var(--faint); font-size: 13px; line-height: 1.45; }
+
+.reader .text pre { overflow-x: auto; padding: 12px; border-radius: 8px; background: var(--chip); font-size: 14px; }
+
+.reader .text table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 0 0 1em; font-size: 15px; }
+
+.reader .text th, .reader .text td { padding: 6px 8px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+
+.reader .text hr { margin: 1.5em 0; border: 0; border-top: 1px solid var(--line); }
+
+/* The site's own page, in a frame as wide and tall as the reader allows. */
+.reader.site-view .hero, .reader.site-view .tags { display: none; }
+
+.reader.site-view #reader-text { max-width: none; }
+
+.site-frame {
+  display: block;
+  width: 100%;
+  height: max(420px, calc(100dvh - 250px));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+}
+
 .reader .tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 16px auto 0; }
 
 .reader .note { color: var(--faint); font-size: 14px; border-top: 1px solid var(--line); padding-top: 14px; margin-top: 18px; }
