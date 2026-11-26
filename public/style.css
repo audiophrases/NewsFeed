@@ -459,6 +459,9 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 
 .reader { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); }
 
+/* The article's text size (A− A+): its headline and text are sized in multiples of --read. */
+.reader { --read: 1; }
+
 .reader-bar {
   display: flex;
   align-items: center;
@@ -469,6 +472,18 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 }
 
 .reader:not(.has-article) .reader-bar { visibility: hidden; }
+
+.reader-bar .text-size { font-size: 17px; font-weight: 700; letter-spacing: -.02em; }
+
+.reader-bar .text-size small { font-size: 13px; margin-left: 1px; }
+
+#text-smaller { font-size: 14px; }
+
+/* The smallest phones: eight buttons in the bar's one line. */
+@media (max-width: 380px) {
+  .reader-bar { gap: 0; padding: 4px; }
+  .reader-bar .icon { width: 36px; padding: 6px; }
+}
 
 .reader-body { flex: 1; padding: 24px clamp(16px, 5vw, 56px) 48px; }
 
@@ -501,7 +516,7 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 
 .reader .add-outlet svg { width: 16px; height: 16px; }
 
-.reader h2 { margin: 10px auto 12px; font-size: clamp(22px, 2.6vw, 30px); line-height: 1.25; }
+.reader h2 { margin: 10px auto 12px; font-size: calc(clamp(22px, 2.6vw, 30px) * var(--read)); line-height: 1.25; }
 
 /* How much of the article this is: full (checked), partial, can't be checked, summary only. */
 .reader .r-status { margin: 0 0 16px; color: var(--faint); font-size: 13px; line-height: 1.5; }
@@ -527,18 +542,18 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 
 .reader .hero { display: block; width: 100%; max-height: 420px; object-fit: cover; border-radius: 12px; margin-bottom: 18px; background: var(--chip); }
 
-.reader .text p, .reader .text li { font-size: 17px; line-height: 1.65; color: var(--row); margin: 0 0 1em; }
+.reader .text p, .reader .text li { font-size: calc(17px * var(--read)); line-height: 1.65; color: var(--row); margin: 0 0 1em; }
 
-.reader .text h3 { font-size: 19px; margin: 1.4em 0 .5em; }
+.reader .text h3 { font-size: calc(19px * var(--read)); margin: 1.4em 0 .5em; }
 
-.reader .text blockquote { margin: 0 0 1em; padding-left: 14px; border-left: 3px solid var(--accent); color: var(--muted); font-size: 17px; }
+.reader .text blockquote { margin: 0 0 1em; padding-left: 14px; border-left: 3px solid var(--accent); color: var(--muted); font-size: calc(17px * var(--read)); }
 
 .reader .text ul { padding-left: 20px; }
 
 /* A reading view made from the page: its pictures, captions, links and tables too. */
 .reader .text ol { padding-left: 24px; }
 
-.reader .text h4, .reader .text h5 { font-size: 17px; margin: 1.3em 0 .4em; }
+.reader .text h4, .reader .text h5 { font-size: calc(17px * var(--read)); margin: 1.3em 0 .4em; }
 
 .reader .text a { color: var(--accent); }
 
@@ -548,11 +563,11 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 
 .reader .text figure img { margin-bottom: .4em; }
 
-.reader .text figcaption { color: var(--faint); font-size: 13px; line-height: 1.45; }
+.reader .text figcaption { color: var(--faint); font-size: calc(13px * var(--read)); line-height: 1.45; }
 
-.reader .text pre { overflow-x: auto; padding: 12px; border-radius: 8px; background: var(--chip); font-size: 14px; }
+.reader .text pre { overflow-x: auto; padding: 12px; border-radius: 8px; background: var(--chip); font-size: calc(14px * var(--read)); }
 
-.reader .text table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 0 0 1em; font-size: 15px; }
+.reader .text table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 0 0 1em; font-size: calc(15px * var(--read)); }
 
 .reader .text th, .reader .text td { padding: 6px 8px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
 
@@ -564,12 +579,21 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .reader.site-view #reader-text { max-width: none; }
 
 .site-frame {
-  display: block;
-  width: 100%;
   height: max(420px, calc(100dvh - 250px));
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: #fff;
+}
+
+/* Zoomed by the article text size: laid out smaller, scaled up to fill the same box. */
+.site-frame iframe {
+  display: block;
+  width: calc(100% / var(--read));
+  height: calc(100% / var(--read));
+  border: 0;
+  transform: scale(var(--read));
+  transform-origin: 0 0;
 }
 
 .reader .tags { display: flex; flex-wrap: wrap; gap: 6px; margin: 16px auto 0; }

@@ -43,7 +43,7 @@ let readKeys = new Set();
 /** Saved articles by key, kept whole so they outlive the feeds. */
 let saved = new Map();
 /** searchLangs: the languages searches use, as last picked (the first is the main one); null until picked. */
-let prefs = { view: 'all', sort: 'newest', since: 0, unreadOnly: false, langs: [], fullText: true, searchLangs: null };
+let prefs = { view: 'all', sort: 'newest', since: 0, unreadOnly: false, langs: [], fullText: true, searchLangs: null, textSize: 1 };
 let shown = PAGE;
 let visible = [];
 let selectedKey = null;
@@ -80,6 +80,22 @@ const saveSources = () => {
 const saveRead = () => store(KEY_READ, [...readKeys].slice(-READ_LIMIT));
 const saveSaved = () => store(KEY_SAVED, [...saved.values()]);
 const savePrefs = () => store(KEY_PREFS, prefs);
+
+/** The article text sizes A− and A+ step through, as multiples of the usual size. */
+const TEXT_SIZES = [0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6, 1.8, 2];
+
+/** Sets the article text size: a step up (1), down (-1), or none (0, to apply the saved one). */
+function textSize(step) {
+  const now = TEXT_SIZES.indexOf(prefs.textSize) >= 0 ? TEXT_SIZES.indexOf(prefs.textSize) : TEXT_SIZES.indexOf(1);
+  const next = Math.min(TEXT_SIZES.length - 1, Math.max(0, now + step));
+  prefs.textSize = TEXT_SIZES[next];
+  $('reader').style.setProperty('--read', String(prefs.textSize));
+  $('text-smaller').disabled = next === 0;
+  $('text-larger').disabled = next === TEXT_SIZES.length - 1;
+  if (!step) return;
+  savePrefs();
+  toast(`Text ${Math.round(prefs.textSize * 100)}%`);
+}
 
 // ---- sources -----------------------------------------------------------------------------
 
@@ -1241,14 +1257,16 @@ function showSite(a, why = '') {
   if (!address || !text) return;
   siteShown.set(a.key, why);
   $('reader').classList.add('site-view');
-  const frame = el('iframe', 'site-frame');
+  const frame = el('iframe');
   frame.src = address;
   frame.title = `${a.sourceName}: ${a.title}`;
   frame.referrerPolicy = 'no-referrer';
   // The page runs as on its own site, but can't take NewsFeed's place (pages in frames often try).
   frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox');
   frame.setAttribute('allow', 'fullscreen');
-  text.replaceChildren(frame);
+  const box = el('div', 'site-frame');
+  box.append(frame);
+  text.replaceChildren(box);
   const host = hostOf(address) || a.sourceName;
   setStatus('site', 'The site’s own page', `${why ? why + ' ' : ''}Shown here as ${host} shows it.`);
   readerActions(a, `If it stays blank, ${host} doesn’t let other sites show its pages: open it on the site.`,
@@ -2720,6 +2738,7 @@ function onKey(e) {
     s: () => toggleSave(), m: toggleRead, r: () => refresh(), f: () => a && loadFullText(a), w: toggleSite,
     o: () => a && a.link && window.open(articleLink(a), '_blank', 'noopener'),
     '/': () => $('q').focus(), Escape: closeReader,
+    '+': () => textSize(1), '=': () => textSize(1), '-': () => textSize(-1),
   };
   const action = actions[e.key];
   if (!action) return;
@@ -2840,6 +2859,9 @@ async function start() {
   setInterval(() => { if (document.visibilityState === 'visible') syncNow(); }, SYNC_EVERY_MS);
 
   setupPullToRefresh();
+  $('text-smaller').addEventListener('click', () => textSize(-1));
+  $('text-larger').addEventListener('click', () => textSize(1));
+  textSize(0);
   render();
   renderSyncButton();
   refresh();
