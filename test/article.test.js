@@ -22,6 +22,16 @@ test('a page that says nothing about itself: completeness unknown', () => {
   assert.deepEqual(a.completeness, { status: 'unknown', expected: null, subscriber: false });
 });
 
+test('consent dialogs are removed without dropping reporting about cookies', () => {
+  const story = ['Cookies will be the subject of the next privacy hearing.', ...paras(5)];
+  const dialog = '<div role="dialog"><div><p>Please make your privacy choices before reading on.</p></div></div>';
+  const banner = '<section id="onetrust-banner-sdk"><p>Manage vendor settings for this browser.</p></section>';
+  const html = page('', '<article>' + story.map(p => '<p>' + p + '</p>').join(dialog) + banner + '</article>' +
+      '<div>' + paras(12).map(p => '<p>Elsewhere in the news: ' + p + '</p>').join('') + '</div>');
+  assert.deepEqual(extractArticle(html, URL).blocks.map(b => b.text), story);
+  assert.equal(extractArticle(page('', dialog + banner), URL).words, 0);
+});
+
 test('word count stated and matched: full', () => {
   const html = page(ld({ '@type': 'NewsArticle', wordCount: 95 }),
       `<article>${paras(6).map(p => `<p>${p}</p>`).join('')}</article>`);

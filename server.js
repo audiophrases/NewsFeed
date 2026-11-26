@@ -14,7 +14,7 @@ const path = require('path');
 
 const { getText, getBytes, postText, reason, FetchError } = require('./lib/fetch');
 const { parseFeed, feedLinks, looksLikeFeed, tags, attrOf, absolute, entities } = require('./lib/feeds');
-const { extractArticle } = require('./lib/article');
+const { extractArticle, withoutDialogs } = require('./lib/article');
 const { candidateSites, feedBelongs, feedKey } = require('./lib/sources');
 const { iconCandidates, imageType, ICON_MAX_BYTES } = require('./lib/icons');
 const googleLinks = require('./lib/googlenews');
@@ -448,9 +448,66 @@ function fetchPage(url) {
   return promise;
 }
 
+/** The public WordPress post representation advertised by the page, or named by a numeric permalink. */
+async function readPublicPost(url, html = '') {
+  const article = new URL(url);
+  let endpoint;
+  for (const tag of tags(html, 'link')) {
+    if (attrOf(tag, 'type') !== 'application/json' || attrOf(tag, 'rel') !== 'alternate') continue;
+    const href = absolute(attrOf(tag, 'href'), url);
+    if (!href) continue;
+    const api = new URL(href);
+    if (api.origin === article.origin && /\/wp-json\/wp\/v2\/posts\/\d+\/?$/.test(api.pathname)) {
+      endpoint = api;
+      break;
+    }
+  }
+  if (!endpoint) {
+    const id = article.searchParams.get('p') || /[-/](\d+)\/?$/.exec(article.pathname)?.[1];
+    if (!/^\d{1,12}$/.test(id || '')) return null;
+    endpoint = new URL('/wp-json/wp/v2/posts/' + id, article);
+  }
+  endpoint.search = new URLSearchParams({ context: 'view', _fields: 'id,status,link,content' });
+  const response = await getText(endpoint.href, { Accept: 'application/json' }, 2 * 1024 * 1024);
+  if (new URL(response.url).origin !== article.origin) return null;
+  const post = JSON.parse(response.text);
+  if (post?.status !== 'publish' || String(post.id) !== endpoint.pathname.split('/').filter(Boolean).pop() ||
+      post.content?.protected !== false || typeof post.content.rendered !== 'string') return null;
+  const permalink = new URL(post.link);
+  if (permalink.origin !== article.origin) return null;
+  const samePath = article.pathname !== '/' && permalink.pathname.replace(/\/$/, '') === article.pathname.replace(/\/$/, '');
+  for (const [key, value] of article.searchParams) {
+    if (!/^(utm_|fbclid$|gclid$)/i.test(key) && key !== 'p' && permalink.searchParams.get(key) !== value) return null;
+  }
+  const queryId = article.searchParams.get('p');
+  if (queryId ? String(post.id) !== queryId : !samePath) return null;
+  const result = extractArticle('<article>' + post.content.rendered + '</article>', permalink.href);
+  return result.words ? { ...result, from: 'publisher-post' } : null;
+}
+
 async function readArticle(url) {
-  const page = await fetchPage(url);
-  return { ...extractArticle(page.text, page.url), frameable: page.frameable };
+  let page;
+  try {
+    page = await fetchPage(url);
+  } catch (error) {
+    // A publisher may serve its public post as JSON even when its website refuses the request.
+    if (error.message === 'HTTP 403') {
+      const post = await readPublicPost(url).catch(() => null);
+      if (post) return { ...post, frameable: error.frameable };
+    }
+    throw error;
+  }
+  let article = extractArticle(page.text, page.url);
+  if (article.words < 60 && !article.completeness.subscriber && article.completeness.status !== 'full') {
+    const post = await readPublicPost(page.url, page.text).catch(() => null);
+    if (post && post.words > article.words) {
+      article = { ...article, blocks: post.blocks, words: post.words, from: post.from };
+      if (article.completeness.expected) {
+        article.completeness.status = post.words >= article.completeness.expected * 0.85 ? 'full' : 'partial';
+      }
+    }
+  }
+  return { ...article, frameable: page.frameable };
 }
 
 /**
@@ -465,7 +522,7 @@ async function readerPage(url) {
       .replace(/<script\b([^>]*)>[\s\S]*?<\/script>/gi, (m, attrs) => (/application\/ld\+json/i.test(attrs) ? m : ''))
       .replace(/<(style|svg|template)\b[\s\S]*?<\/\1>/gi, '')
       .slice(0, PAGE_MAX_CHARS);
-  return { url: page.url, html, frameable: page.frameable };
+  return { url: page.url, html: withoutDialogs(html), frameable: page.frameable };
 }
 
 // ---- HTTP --------------------------------------------------------------------------------

@@ -91,19 +91,12 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   only, the site refuses NewsFeed, found through Google News…). Articles a site marks for
   subscribers carry a **Subscriber article** tag. The length and subscriber flag come from the
   page's own JSON-LD description (`wordCount`, `articleBody`, `isAccessibleForFree`).
-- **When the text can't be had** – two ways on, tried in this order:
-  - **Reading view**: when NewsFeed's server gets the page but finds little article text in it,
-    the browser makes a reading view of the page with [Mozilla's Readability](https://github.com/mozilla/readability)
-    (the engine of Firefox's Reader View, in `public/vendor/readability`): only the article, with
-    its pictures, captions, lists and links, in NewsFeed's own type and colours. It is rebuilt from
-    a list of allowed tags, so nothing of the page's own (scripts, styles, forms, handlers) comes along.
-  - **The site's own page**: when the server can't get the page (many sites turn away servers
-    but not readers), or the reading view has nothing either, the reader shows the article's page
-    in a frame, loaded by your browser as if you had opened it. It can't be reformatted (browsers
-    don't let one site change another's page) and stays in NewsFeed (it can't take over the tab).
-    This also works for resolved Google News links when the publisher refuses the server's request
-    for text. Sites that forbid frames (`X-Frame-Options`, CSP `frame-ancestors`) get a link instead.
-  - The 🌐 button (or `w`) switches any article to its site's page and back.
+- **Article-only reading** – NewsFeed removes consent dialogs before extracting the body. If the
+  page is thin, it can also read a matching public WordPress post or use
+  [Mozilla’s Readability](https://github.com/mozilla/readability) to recover paragraphs, images
+  and captions. When the publisher supplies only a headline or summary, that stays in the reader.
+  Use the 🌐 button (or `w`) to open the publisher’s own page in NewsFeed if it allows embedding.
+  The same button returns to the article.
   Reading an article from an outlet you don't follow yet (from a topic, a search or a saved
   article), **+ Add source** next to its name adds that outlet. It finds the feeds on the outlet's
   site and ticks the only one, or ticks the outlet's headlines via Google News when the site has

@@ -909,7 +909,7 @@ function renderReader(a) {
   note.id = 'reader-note';
   parts.push(note);
   body.replaceChildren(...parts);
-  if (siteShown.has(a.key)) showSite(a, siteShown.get(a.key));
+  if (siteShown.has(a.key)) showSite(a);
   else if (fullTexts.has(a.key)) showFullText(a, fullTexts.get(a.key));
   else if (refusals.has(a.key)) {
     setStatus('summary', shownSoFar(a), refusals.get(a.key));
@@ -1066,12 +1066,7 @@ const hostOf = link => { try { return new URL(link).hostname.replace(/^www\./, '
 async function loadFullText(a) {
   if (!a.link || !canFetch(a.link)) return;
   // Asked for the text while the site's page shows: back to the reader, which loads it.
-  if (siteShown.has(a.key)) {
-    siteShown.delete(a.key);
-    if (fullTexts.has(a.key) || !prefs.fullText) return renderReader(a);
-    $('reader').classList.remove('site-view');
-    renderSiteButton();
-  }
+  if (siteShown.delete(a.key)) return renderReader(a);
   const note = $('reader-note');
   if (note) note.replaceChildren();
   const link = articleLink(a);
@@ -1084,12 +1079,12 @@ async function loadFullText(a) {
   } catch (e) {
     rememberPublisher(a, e.articleUrl);
     if (e.frameable === false) frameRefused.add(a.key);
-    if (selectedKey !== a.key) return;
+    if (selectedKey !== a.key || siteShown.has(a.key)) return;
     const home = isGoogleNews(articleLink(a)) && outletHome(a);
     if (home) {
       setStatus('loading', 'Checking the publisher’s index…');
       const address = await findPublisherFromBrowser(a, home).catch(() => null);
-      if (selectedKey !== a.key) return;
+      if (selectedKey !== a.key || siteShown.has(a.key)) return;
       if (address) {
         rememberPublisher(a, address);
         return loadFullText(a);
@@ -1104,14 +1099,12 @@ async function loadFullText(a) {
     setStatus('summary', shownSoFar(a), why);
     readerActions(a, '', undefined, !final);
     if (home) $('reader-note').append(publisherLinkForm(a, home));
-    // NewsFeed's server was refused or got nothing, but your browser may still be let in.
-    if (siteMayShow(a, e.message)) showSite(a, why);
     return;
   }
   rememberPublisher(a, result.url);
   if (result.frameable === false) frameRefused.add(a.key);
   fullTexts.set(a.key, result);
-  if (selectedKey === a.key) {
+  if (selectedKey === a.key && !siteShown.has(a.key)) {
     $('open-original').href = articleLink(a);
     showFullText(a, result);
   }
@@ -1127,7 +1120,8 @@ function showFullText(a, result) {
   // Only replace the feed's summary with something longer.
   const summaryLength = (a.summary || '').length;
   const fullLength = result.blocks.reduce((n, b) => n + b.text.length, 0);
-  if (!text || fullLength < Math.max(300, summaryLength * 1.2)) {
+  const minLength = result.from === 'publisher-post' || status === 'full' ? 1 : 300;
+  if (!text || fullLength < Math.max(minLength, summaryLength * 1.2)) {
     const why = subscriber ? 'The page has no more of this subscriber article for NewsFeed.'
       : `${site} didn’t share more than this with NewsFeed.`;
     setStatus('summary', shownSoFar(a), why.replace(/^The/, 'the').replace(/\.$/, ''), subscriber);
@@ -1166,18 +1160,13 @@ function showFullText(a, result) {
 
 // ---- when NewsFeed can't get the article's text ------------------------------------------
 //
-// Two ways on. When the server has the page but found little article text in it (it is built
-// in a way the extraction doesn't know), the browser makes a reading view of it with Mozilla's
-// Readability, as Firefox's Reader View does: only the article, its pictures and links. When
-// the server can't get the page at all, or the reading view has nothing either, the reader shows
-// the site's own page in a frame: your browser loads it, as if you opened it, which many sites
-// allow when they turn NewsFeed's server away. A page in a frame stays the site's own: another
-// site's page can't be reformatted from outside it, so it is shown as is.
+// Readability can recover an article when the paragraph extractor finds too little text.
+// Loading the publisher's interactive site is a separate reader action.
 
 /** Reading views by article key: a promise of the view, or of null when the page has none. */
 const readingViews = new Map();
-/** Articles showing their site's page, by key: why (or '' when you asked for it). */
-const siteShown = new Map();
+/** Articles for which the reader explicitly selected the publisher's site. */
+const siteShown = new Set();
 /** Articles whose site says other sites may not show its pages. */
 const frameRefused = new Set();
 
@@ -1338,15 +1327,11 @@ function siteAddress(a) {
   return location.protocol === 'https:' ? link.replace(/^http:/i, 'https:') : link;
 }
 
-/** After a failed load: whether the site's page is worth showing (not gone, not unknown, not forbidden). */
-const siteMayShow = (a, message) => !!siteAddress(a) && !frameRefused.has(a.key)
-    && !/HTTP 4(04|10)|Not a web|private network|Google News/.test(message);
-
-function showSite(a, why = '') {
+function showSite(a) {
   const address = siteAddress(a);
   const text = $('reader-text');
   if (!address || !text) return;
-  siteShown.set(a.key, why);
+  siteShown.add(a.key);
   $('reader').classList.add('site-view');
   const frame = el('iframe');
   frame.src = address;
@@ -1359,13 +1344,13 @@ function showSite(a, why = '') {
   box.append(frame);
   text.replaceChildren(box);
   const host = hostOf(address) || a.sourceName;
-  setStatus('site', 'The site’s own page', `${why ? why + ' ' : ''}Shown here as ${host} shows it.`);
+  setStatus('site', 'The site’s own page', `Shown here as ${host} shows it.`);
   readerActions(a, `If it stays blank, ${host} doesn’t let other sites show its pages: open it on the site.`,
       undefined, !refusals.has(a.key));
   renderSiteButton();
 }
 
-/** Reading view when the server's page allows one; the site's page when not (or subscribers only). */
+/** Try Readability, then keep the feed's text when there is no readable article body. */
 async function fallbackFromPage(a, result, why) {
   if (result.frameable === false) frameRefused.add(a.key);
   if (!(result.completeness && result.completeness.subscriber)) {
@@ -1374,14 +1359,13 @@ async function fallbackFromPage(a, result, why) {
     try {
       view = await makeReadingView(a);
     } catch (e) {
-      // the page is gone or refused now; the site's page is the way left
+      // The summary is still available.
     }
     if (selectedKey !== a.key || siteShown.has(a.key)) return;
     if (view) return showReadingView(a, view);
   }
   if (selectedKey !== a.key) return;
-  if (siteAddress(a) && !frameRefused.has(a.key)) return showSite(a, why);
-  setStatus('summary', shownSoFar(a), `${why.replace(/\.$/, '')}, and ${a.sourceName} doesn’t let other sites show its pages`);
+  setStatus('summary', shownSoFar(a), why, result.completeness?.subscriber);
   readerActions(a);
 }
 

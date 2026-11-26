@@ -406,16 +406,20 @@ test('the reported Diari La Veu link loads its confirmed publisher URL with Goog
   const fetch = globalThis.fetch;
   let publisherReads = 0;
   t.mock.method(globalThis, 'fetch', (input, options) => {
+    if (new URL(input).pathname === '/wp-json/wp/v2/posts/659514') {
+      return Promise.resolve(Response.json({ id: 659514, status: 'publish', link: publisher,
+        content: { protected: false, rendered: '<p>' + 'El professorat explica la seua proposta. '.repeat(12) + '</p>' } }));
+    }
     if (input !== publisher) return fetch(input, options);
     publisherReads++;
-    return Promise.resolve(new Response(fs.readFileSync(path.join(FIXTURES, 'article.html')), {
-      headers: { 'content-type': 'text/html' },
-    }));
+    return Promise.resolve(new Response('Unavailable', { status: 403 }));
   });
   const found = await api('/api/article', { url });
   assert.equal(found.status, 200);
   assert.equal(found.body.url, publisher);
   assert.ok(found.body.words > 50);
+  assert.equal(found.body.from, 'publisher-post');
+  assert.match(found.body.blocks[0].text, /El professorat/);
   assert.equal(publisherReads, 1);
 });
 
@@ -431,7 +435,29 @@ test('a page for a reading view: fetched once with its article, scripts and styl
   assert.equal(body.frameable, true);
   assert.match(body.html, /The fishing harbour reopened on Monday morning/);
   assert.match(body.html, /application\/ld\+json/, 'the article data pages describe themselves with stays');
-  assert.doesNotMatch(body.html, /window\.analytics|document\.write|<style|<svg/);
+  assert.doesNotMatch(body.html, /window\.analytics|document\.write|<style|<svg|advertising and privacy preferences/);
+});
+
+test('a thin page can advertise its own public post, and other or protected posts are ignored', async t => {
+  const origin = 'https://publisher.example';
+  const html = '<html><link rel="alternate" type="application/json" href="/wp-json/wp/v2/posts/42">' +
+      '<dialog><p>Please configure your privacy preferences.</p></dialog></html>';
+  const fetch = globalThis.fetch;
+  const post = { id: 42, status: 'publish', link: origin + '/news/report',
+    content: { protected: false, rendered: '<p>The reporter confirmed the vote on Thursday.</p>' } };
+  t.mock.method(globalThis, 'fetch', (input, options) => {
+    const target = new URL(input);
+    if (target.origin !== origin) return fetch(input, options);
+    return Promise.resolve(target.pathname === '/wp-json/wp/v2/posts/42' ? Response.json(post)
+      : new Response(html, { headers: { 'content-type': 'text/html' } }));
+  });
+  const read = path => api('/api/article', { url: origin + path });
+  const found = await read('/news/report');
+  assert.deepEqual(found.body.blocks, [{ type: 'p', text: 'The reporter confirmed the vote on Thursday.' }]);
+  assert.deepEqual((await read('/news/other-report')).body.blocks, []);
+  post.link = origin + '/news/protected-report';
+  post.content.protected = true;
+  assert.deepEqual((await read('/news/protected-report')).body.blocks, []);
 });
 
 test('whether a site lets its pages be shown in a frame', async () => {
