@@ -92,11 +92,17 @@ const site = http.createServer((req, res) => {
   }
   const u = new URL(req.url, siteUrl);
   if (u.pathname === '/wp-json/wp/v2/search') {
-    const matches = u.searchParams.get('search') === 'CADPV acusa Conselleria Inspecció';
+    const matches = u.searchParams.get('search') === 'CADPV';
     return res.end(JSON.stringify(matches ? [
       { title: headline, url: 'https://other.example/copy' },
       { title: headline, url: `http://${req.headers.host}/story` },
     ] : []));
+  }
+  if (u.pathname === '/' && u.searchParams.get('s') === 'OSCE' && !u.searchParams.has('feed')) {
+    return res.end('<html><a href="/?p=253">The OSCE publishes its election observation report</a></html>');
+  }
+  if (u.pathname === '/' && u.searchParams.get('p') === '253') {
+    return res.end(fs.readFileSync(path.join(FIXTURES, 'article.html')));
   }
   if (u.pathname === '/bing-news') {
     const title = 'A local publisher shares the council minutes';
@@ -384,6 +390,33 @@ test('an indexed publisher URL survives a refused text request for the embedded 
   assert.deepEqual(found.body, { error: 'HTTP 403', articleUrl: site + '/restricted', frameable: true });
   const blocked = await api('/api/article', { url: site + '/restricted-noframe' });
   assert.equal(blocked.body.frameable, false);
+});
+
+test('a publisher HTML search finds the headline when its feeds and REST index miss', async () => {
+  const site = 'http://localhost:' + new URL(siteUrl).port;
+  const found = await api('/api/article', { url: siteUrl + '/rss/articles/CBMiNoSignature_00000021',
+    title: 'The OSCE publishes its election observation report', site });
+  assert.equal(found.status, 200);
+  assert.equal(found.body.url, site + '/?p=253');
+});
+
+test('the reported Diari La Veu link loads its confirmed publisher URL with Google unavailable', async t => {
+  const url = 'https://news.google.com/rss/articles/CBMitgFBVV95cUxNSUhiSnNhZVY0MXFObGQyS0E5X2VNc0JQb0x0STJsazBEZHd6dnp2SFk5Sm5TUTR2TUFLUTNnNW82emdTRDVCa1l5RVF2YWNEM0tKVHRaLWhNUE94OHJnT3ZYZ1ZPUXQtbVVfRjBsLWw0VG5ma3ZJa2FnOGNMX2ZVSmRzd2p5Rkg1OC1PMFJnSTFISGZ0UXVrNVRPcTVRM3NIX3ZmOVBKOUNFQUdoUlBfVTV3R1lfZw?oc=5';
+  const publisher = 'https://www.diarilaveu.cat/societat/docents-acusen-orti-de-convertir-la-inspeccio-en-una-policia-ideologica-659514/';
+  const fetch = globalThis.fetch;
+  let publisherReads = 0;
+  t.mock.method(globalThis, 'fetch', (input, options) => {
+    if (input !== publisher) return fetch(input, options);
+    publisherReads++;
+    return Promise.resolve(new Response(fs.readFileSync(path.join(FIXTURES, 'article.html')), {
+      headers: { 'content-type': 'text/html' },
+    }));
+  });
+  const found = await api('/api/article', { url });
+  assert.equal(found.status, 200);
+  assert.equal(found.body.url, publisher);
+  assert.ok(found.body.words > 50);
+  assert.equal(publisherReads, 1);
 });
 
 test('a page for a reading view: fetched once with its article, scripts and styles left out', async () => {

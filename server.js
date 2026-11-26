@@ -19,6 +19,7 @@ const { candidateSites, feedBelongs, feedKey } = require('./lib/sources');
 const { iconCandidates, imageType, ICON_MAX_BYTES } = require('./lib/icons');
 const googleLinks = require('./lib/googlenews');
 const onSite = require('./lib/findarticle');
+const { confirmedPublisherLink, publisherSearchTerm } = require('./public/publisher');
 const zlib = require('zlib');
 
 const PORT = Number(process.env.PORT) || 8091;
@@ -285,7 +286,7 @@ let googlePausedUntil = 0;
  */
 async function articleAddress(link, site) {
   const id = googleLinks.articleId(link);
-  const inside = googleLinks.addressInside(id);
+  const inside = confirmedPublisherLink(link) || googleLinks.addressInside(id);
   if (inside) return inside;
   return inLookupSlot(async () => {
     if (Date.now() < googlePausedUntil) throw new FetchError('Google News isn’t answering NewsFeed’s lookups just now');
@@ -370,13 +371,19 @@ async function findOnSite(site, title) {
   const hit = found && found.items.find(i => i.link && onSite.sameHeadline(i.title, title));
   if (hit) return hit.link;
   // A shorter query tolerates punctuation and small edits. Compare the full result title.
-  const terms = (title.match(/[\p{L}\p{N}]{4,}/gu) || []).slice(0, 4).join(' ') || title;
+  const terms = publisherSearchTerm(title);
   const wp = new URL('/wp-json/wp/v2/search', origin);
   wp.search = new URLSearchParams({ search: terms, type: 'post', per_page: '20' });
   const results = await getText(wp.href, { Accept: 'application/json' }, 128 * 1024)
       .then(page => JSON.parse(page.text)).catch(() => null);
   const post = Array.isArray(results) && onSite.publisherResult(results, title, origin);
   if (post) return post;
+  const searchPage = await getText(origin + '/?s=' + encodeURIComponent(terms), PAGE_HEADERS, 1024 * 1024).catch(() => null);
+  if (searchPage) {
+    const links = onSite.siteLinks(searchPage.text, searchPage.url);
+    const match = links.find(l => onSite.sameHeadline(l.text, title) && onSite.publisherAddress(l.url, origin));
+    if (match) return match.url;
+  }
   for (const url of await sitemapsOf(origin).catch(() => [])) {
     const address = onSite.findInSitemap(await readSitemap(url).catch(() => ''), title);
     if (address) return address;

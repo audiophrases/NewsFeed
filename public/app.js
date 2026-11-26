@@ -977,13 +977,63 @@ let knownLinks = new Map();
 const saveLinks = () => store(KEY_LINKS, [...knownLinks].slice(-LINKS_LIMIT));
 
 /** The article's own address when known (a topic's articles come as Google News links). */
-const articleLink = a => (a.link && knownLinks.get(a.link)) || a.link;
+const articleLink = a => confirmedPublisherLink(a.link) || knownLinks.get(a.link) || a.link;
 
 function rememberPublisher(a, address) {
   if (!isGoogleNews(a.link) || !canFetch(address) || isGoogleNews(address)) return;
   knownLinks.delete(a.link);
   knownLinks.set(a.link, address);
   saveLinks();
+}
+
+// A publisher may allow its public WordPress index to be read from the reader's network.
+async function findPublisherFromBrowser(a, home) {
+  const url = new URL('/wp-json/wp/v2/search', home);
+  if (url.protocol !== 'https:' || !/\.[a-z]{2,}$/i.test(url.hostname)) return null;
+  url.search = new URLSearchParams({ search: publisherSearchTerm(a.title), type: 'post', per_page: '20' });
+  const response = await fetch(url, {
+    credentials: 'omit', redirect: 'error', referrerPolicy: 'no-referrer', signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) return null;
+  const rows = await response.json();
+  if (!Array.isArray(rows)) return null;
+  const title = document.createElement('template');
+  for (const row of rows.slice(0, 20)) {
+    if (typeof row?.title !== 'string') continue;
+    title.innerHTML = row.title;
+    const link = publisherAddress(row.url, home);
+    if (link && sameHeadline(title.content.textContent, a.title)) return link;
+  }
+  return null;
+}
+
+function publisherLinkForm(a, home) {
+  const details = el('details', 'publisher-link');
+  details.append(el('summary', '', 'Use a publisher link'));
+  const form = el('form', 'actions');
+  const input = el('input');
+  input.type = 'url';
+  input.required = true;
+  input.placeholder = 'Paste the article URL';
+  input.setAttribute('aria-label', 'Publisher article URL');
+  input.addEventListener('input', () => input.setCustomValidity(''));
+  const submit = el('button', 'primary subtle', 'Read here');
+  submit.type = 'submit';
+  form.append(input, submit);
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    const address = publisherAddress(input.value.trim(), home);
+    if (!address) {
+      input.setCustomValidity(`Enter an article URL on ${hostOf(home)}.`);
+      input.reportValidity();
+      return;
+    }
+    rememberPublisher(a, address);
+    $('open-original').href = address;
+    loadFullText(a);
+  });
+  details.append(form);
+  return details;
 }
 
 /** Articles whose site refused for good (subscribers only, blocked, gone), by key: the reason. */
@@ -1034,18 +1084,28 @@ async function loadFullText(a) {
   } catch (e) {
     rememberPublisher(a, e.articleUrl);
     if (e.frameable === false) frameRefused.add(a.key);
-    if (selectedKey === a.key) {
-      $('open-original').href = articleLink(a);
-      const why = explainFailure(e.message, a.sourceName) +
-          (e.frameable === false ? ' The publisher also blocks embedded pages.' : '');
-      // Asking again won't change a subscribers-only, blocked or deleted page; a timeout might pass.
-      const final = /HTTP (40[1-4]|410)/.test(e.message) && !isGoogleNews(articleLink(a));
-      if (final) refusals.set(a.key, why);
-      setStatus('summary', shownSoFar(a), why);
-      readerActions(a, '', undefined, !final);
-      // NewsFeed's server was refused or got nothing, but your browser may still be let in.
-      if (siteMayShow(a, e.message)) showSite(a, why);
+    if (selectedKey !== a.key) return;
+    const home = isGoogleNews(articleLink(a)) && outletHome(a);
+    if (home) {
+      setStatus('loading', 'Checking the publisher’s index…');
+      const address = await findPublisherFromBrowser(a, home).catch(() => null);
+      if (selectedKey !== a.key) return;
+      if (address) {
+        rememberPublisher(a, address);
+        return loadFullText(a);
+      }
     }
+    $('open-original').href = articleLink(a);
+    const why = explainFailure(e.message, a.sourceName) +
+        (e.frameable === false ? ' The publisher also blocks embedded pages.' : '');
+    // Asking again won't change a subscribers-only, blocked or deleted page; a timeout might pass.
+    const final = /HTTP (40[1-4]|410)/.test(e.message) && !isGoogleNews(articleLink(a));
+    if (final) refusals.set(a.key, why);
+    setStatus('summary', shownSoFar(a), why);
+    readerActions(a, '', undefined, !final);
+    if (home) $('reader-note').append(publisherLinkForm(a, home));
+    // NewsFeed's server was refused or got nothing, but your browser may still be let in.
+    if (siteMayShow(a, e.message)) showSite(a, why);
     return;
   }
   rememberPublisher(a, result.url);
@@ -1259,7 +1319,7 @@ function showReadingView(a, view) {
   text.replaceChildren(...readingNodes(doc.body, view.url));
   // The headline and picture the reader already shows, not twice.
   const heading = text.querySelector('h3, h4');
-  if (heading && titleKey(heading.textContent) === titleKey(a.title) && !heading.previousElementSibling?.textContent.trim()) heading.remove();
+  if (heading && sameHeadline(heading.textContent, a.title) && !heading.previousElementSibling?.textContent.trim()) heading.remove();
   const first = text.querySelector('img');
   if (first && sameImage(first.src, a.image)) (first.closest('figure') || first).remove();
   while (labelOnly(text.firstElementChild)) text.firstElementChild.remove();

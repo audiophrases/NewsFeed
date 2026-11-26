@@ -616,6 +616,10 @@ body.full-read .topbar { display: none; }
 
 .reader .actions .primary { margin: 0; display: inline-flex; align-items: center; text-decoration: none; }
 
+.reader .publisher-link { margin-top: 14px; }
+.reader .publisher-link summary { cursor: pointer; color: var(--muted); }
+.reader .publisher-link input { flex: 1; min-width: 12em; padding: 8px; font: inherit; }
+
 /* ---- dialog & toast (as in Play the News) -------------------------------------------- */
 
 dialog {
