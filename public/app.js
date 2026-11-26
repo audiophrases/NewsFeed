@@ -825,21 +825,16 @@ function select(key, { scroll = false } = {}) {
 
 // ---- full screen reading -------------------------------------------------------------------
 //
-// The reader bar's full screen button: the browser's own bars go (where the browser allows a page
-// to ask, as Android's do; an iPhone doesn't), and so does NewsFeed's search bar; on wide screens
-// the sidebar and list too. The same button, Esc or leaving the browser's full screen ends it.
+// The reader bar's full screen button: NewsFeed's search bar goes while an article is open, and on
+// wide screens the sidebar and list too. It doesn't ask the browser for full screen: Chrome then
+// shows a notice on how to leave it, every time, which no page can turn off. The same button or
+// Esc ends it.
 
 let fullRead = false;
 
 function setFullRead(on) {
   fullRead = on;
   document.body.classList.toggle('full-read', on);
-  const root = document.documentElement;
-  if (on && document.fullscreenEnabled && !document.fullscreenElement) {
-    root.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
-  } else if (!on && document.fullscreenElement) {
-    document.exitFullscreen().catch(() => {});
-  }
   $('full-screen').setAttribute('aria-pressed', String(on));
   $('full-screen').setAttribute('aria-label', on ? 'Leave full screen' : 'Full screen');
   $('full-screen').title = on ? 'Leave full screen (Esc)' : 'Full screen';
@@ -2885,8 +2880,6 @@ async function start() {
   $('text-smaller').addEventListener('click', () => textSize(-1));
   $('text-larger').addEventListener('click', () => textSize(1));
   $('full-screen').addEventListener('click', () => setFullRead(!fullRead));
-  // Left the browser's full screen its own way (Esc, the back gesture): leave reading full screen too.
-  document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && fullRead) setFullRead(false); });
   textSize(0);
   render();
   renderSyncButton();

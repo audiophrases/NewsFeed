@@ -110,9 +110,10 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   `f` full text, `w` the site's page, `-`/`+` text size, `/` search, `r` refresh.
 - **Text size** – **−** and **+** in the reader's bar make the article's headline and text
   smaller or larger (80% to 200%, remembered); the site's own page zooms along.
-- **Full screen** – the ⛶ button in the reader's bar hides the browser's bars (where the browser
-  lets a page ask: Android yes, iPhone no) and NewsFeed's search bar; on wide screens the sidebar
-  and list too, leaving just the article (`j`/`k` still move on). The same button or Esc ends it.
+- **Full screen** – the ⛶ button in the reader's bar hides NewsFeed's search bar while an article
+  is open; on wide screens the sidebar and list too, leaving just the article (`j`/`k` still move
+  on). It doesn't ask the browser for full screen, so Chrome shows no "swipe to exit" notice. The
+  same button or Esc ends it.
 - **Export / Import** – your sources, topics and saved articles as JSON; OPML from other feed
   readers can be imported too.
 - **Sync** – sign in with Google (PinPlay's sign-in) on each of your devices, and what you follow,
