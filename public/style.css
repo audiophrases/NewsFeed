@@ -473,11 +473,6 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 
 .reader:not(.has-article) .reader-bar { visibility: hidden; }
 
-.reader-bar .text-size { font-size: 17px; font-weight: 700; letter-spacing: -.02em; }
-
-.reader-bar .text-size small { font-size: 13px; margin-left: 1px; }
-
-#text-smaller { font-size: 14px; }
 
 /* The smallest phones: eight buttons in the bar's one line. */
 @media (max-width: 380px) {

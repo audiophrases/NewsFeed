@@ -108,7 +108,7 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   down on a phone to update it now.
 - **Keyboard** – `j`/`k` next/previous, `s` save, `m` read/unread, `o` open original,
   `f` full text, `w` the site's page, `-`/`+` text size, `/` search, `r` refresh.
-- **Text size** – **A−** and **A+** in the reader's bar make the article's headline and text
+- **Text size** – **−** and **+** in the reader's bar make the article's headline and text
   smaller or larger (80% to 200%, remembered); the site's own page zooms along.
 - **Export / Import** – your sources, topics and saved articles as JSON; OPML from other feed
   readers can be imported too.
