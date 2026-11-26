@@ -480,6 +480,23 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
   .reader-bar .icon { width: 36px; padding: 6px; }
 }
 
+@media (max-width: 340px) {
+  .reader-bar .icon { width: 34px; padding: 6px 5px; }
+}
+
+/* Full screen reading: no search bar; on wide screens no sidebar or list either. */
+body.full-read .topbar { display: none; }
+
+@media (min-width: 861px) {
+  body.full-read .layout { grid-template-columns: 1fr; }
+  body.full-read .sidebar, body.full-read .list-pane { display: none; }
+}
+
+@media (max-width: 860px) {
+  /* On a phone the list keeps its search bar: full screen is for the article. */
+  body.full-read:not(.reading) .topbar { display: flex; }
+}
+
 .reader-body { flex: 1; padding: 24px clamp(16px, 5vw, 56px) 48px; }
 
 .reader-body > * { max-width: 720px; margin-left: auto; margin-right: auto; }

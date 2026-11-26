@@ -823,6 +823,29 @@ function select(key, { scroll = false } = {}) {
   }
 }
 
+// ---- full screen reading -------------------------------------------------------------------
+//
+// The reader bar's full screen button: the browser's own bars go (where the browser allows a page
+// to ask, as Android's do; an iPhone doesn't), and so does NewsFeed's search bar; on wide screens
+// the sidebar and list too. The same button, Esc or leaving the browser's full screen ends it.
+
+let fullRead = false;
+
+function setFullRead(on) {
+  fullRead = on;
+  document.body.classList.toggle('full-read', on);
+  const root = document.documentElement;
+  if (on && document.fullscreenEnabled && !document.fullscreenElement) {
+    root.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+  } else if (!on && document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {});
+  }
+  $('full-screen').setAttribute('aria-pressed', String(on));
+  $('full-screen').setAttribute('aria-label', on ? 'Leave full screen' : 'Full screen');
+  $('full-screen').title = on ? 'Leave full screen (Esc)' : 'Full screen';
+  $('full-icon').setAttribute('href', on ? '#i-full-exit' : '#i-full');
+}
+
 function closeReader() {
   if (!document.body.classList.contains('reading')) return;
   document.body.classList.remove('reading');
@@ -2737,7 +2760,7 @@ function onKey(e) {
     j: () => step(1), ArrowDown: () => step(1), k: () => step(-1), ArrowUp: () => step(-1),
     s: () => toggleSave(), m: toggleRead, r: () => refresh(), f: () => a && loadFullText(a), w: toggleSite,
     o: () => a && a.link && window.open(articleLink(a), '_blank', 'noopener'),
-    '/': () => $('q').focus(), Escape: closeReader,
+    '/': () => $('q').focus(), Escape: () => (fullRead ? setFullRead(false) : closeReader()),
     '+': () => textSize(1), '=': () => textSize(1), '-': () => textSize(-1),
   };
   const action = actions[e.key];
@@ -2861,6 +2884,9 @@ async function start() {
   setupPullToRefresh();
   $('text-smaller').addEventListener('click', () => textSize(-1));
   $('text-larger').addEventListener('click', () => textSize(1));
+  $('full-screen').addEventListener('click', () => setFullRead(!fullRead));
+  // Left the browser's full screen its own way (Esc, the back gesture): leave reading full screen too.
+  document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && fullRead) setFullRead(false); });
   textSize(0);
   render();
   renderSyncButton();
