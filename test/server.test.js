@@ -19,6 +19,8 @@ const lookups = [];
 const headline = 'La CADPV acusa la Conselleria de fer de la Inspecció una eina de censura';
 const aldiaTitle = 'Un ferit greu i dos de lleus en incendiar-se un pis a Torredembarra (Tarragona)';
 const aldiaPath = '/gent/noticia-ferit-greu-dos-lleus-incendiar-pis-torredembarra-tarragona-20261126182042.html';
+const telecincoTitle = 'Un herido grave y dos leves en el incendio de un piso en Torredembarra, Tarragona';
+const telecincoPath = '/noticias/catalunya/20261126/herido-grave-incendio-torredembarra-tarragona_18_020827795.html';
 
 /** Stands in for Google News' article pages and the lookup they make (see lib/googlenews.js). */
 function googleNews(req, res, u) {
@@ -94,6 +96,16 @@ const site = http.createServer((req, res) => {
     return res.end(PNG);
   }
   const u = new URL(req.url, siteUrl);
+  if (u.pathname === '/sitemap.xml') {
+    const here = 'http://' + req.headers.host;
+    return res.end(`<urlset><url><loc>${here}${telecincoPath.replace('020827795', '020000000')}</loc></url>
+      <url><loc>${here}${telecincoPath}</loc></url></urlset>`);
+  }
+  if (u.pathname.startsWith('/noticias/catalunya/')) {
+    pageHits[u.pathname] = (pageHits[u.pathname] || 0) + 1;
+    const headline = u.pathname === telecincoPath ? telecincoTitle : 'Otro incendio en Torredembarra';
+    return res.end(`<html><title>Noticias</title><article><h1>${headline}</h1><p>Local test copy of the report from Torredembarra.</p></article></html>`);
+  }
   if (u.pathname === '/cercador.aspx' && u.searchParams.get('buscar') === 'ferit greu lleus incendiar') {
     return res.end(`<a href="${aldiaPath}">${aldiaTitle}</a>`);
   }
@@ -455,6 +467,26 @@ test('the Al Dia report uses the confirmed permalink for its outlet, headline an
   assert.equal(result.status, 200);
   assert.equal(result.body.url, publisher);
   assert.match(result.body.blocks[0].text, /Torredembarra/);
+});
+
+test('a short sitemap slug is verified against the page headline before the article is shown', async () => {
+  const site = 'http://localhost:' + new URL(siteUrl).port;
+  const found = await api('/api/article', { url: siteUrl + '/rss/articles/CBMiNoSignature_00000028', site, title: telecincoTitle });
+  assert.equal(found.status, 200);
+  assert.equal(found.body.url, site + telecincoPath);
+  assert.equal(pageHits[telecincoPath], 1, 'the verified page is reused by the reader');
+  const other = await api('/api/article', { url: siteUrl + '/rss/articles/CBMiNoSignature_00000029', site,
+    title: telecincoTitle.replace('dos leves', 'tres leves') });
+  assert.equal(other.status, 502, 'shared locations and topic words do not establish a headline match');
+});
+
+test('the reported Telecinco headline resolves independently of the Al Dia report about the same fire', () => {
+  const { confirmedPublisherLink } = require('../public/publisher');
+  const link = 'https://news.google.com/rss/articles/CBMiOpaqueLinkForFixture2027';
+  const item = { site: 'https://telecinco.es', title: telecincoTitle, publishedAt: Date.parse('2026-11-26T17:51:00Z') };
+  assert.equal(confirmedPublisherLink(link, item), 'https://www.telecinco.es' + telecincoPath);
+  assert.equal(confirmedPublisherLink(link, { ...item, site: 'https://www.aldia.cat' }), null);
+  assert.equal(confirmedPublisherLink(link, { ...item, title: aldiaTitle }), null);
 });
 
 test('a page for a reading view: fetched once with its article, scripts and styles left out', async () => {

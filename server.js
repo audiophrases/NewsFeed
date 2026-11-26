@@ -13,13 +13,13 @@ const os = require('os');
 const path = require('path');
 
 const { getText, getBytes, postText, reason, FetchError } = require('./lib/fetch');
-const { parseFeed, feedLinks, looksLikeFeed, tags, attrOf, absolute, entities } = require('./lib/feeds');
-const { extractArticle, withoutDialogs } = require('./lib/article');
+const { parseFeed, feedLinks, looksLikeFeed, tags, attrOf, absolute, entities, htmlToText } = require('./lib/feeds');
+const { articleTitle, extractArticle, withoutDialogs } = require('./lib/article');
 const { candidateSites, feedBelongs, feedKey } = require('./lib/sources');
 const { iconCandidates, imageType, ICON_MAX_BYTES } = require('./lib/icons');
 const googleLinks = require('./lib/googlenews');
 const onSite = require('./lib/findarticle');
-const { confirmedPublisherLink, publisherSearchTerm } = require('./public/publisher');
+const { confirmedPublisherLink, foldHeadline, publisherSearchTerm } = require('./public/publisher');
 const zlib = require('zlib');
 
 const PORT = Number(process.env.PORT) || 8091;
@@ -360,13 +360,23 @@ const homeOf = origin => cached('home|' + origin, 30 * 60 * 1000, async () => {
  */
 async function findOnSite(site, title) {
   const origin = new URL(site).origin;
+  const alternatives = [];
+  // Only fetch a couple of plausible pages to verify abbreviated slugs. Never accept a
+  // weaker URL match by itself, as several stories can cover the same incident.
+  function consider(url, score) {
+    if (score < 0.5 || (alternatives.length === 2 && score <= alternatives[1].score)) return;
+    if (!onSite.publisherAddress(url, origin) || alternatives.some(candidate => candidate.url === url)) return;
+    alternatives.push({ url, score });
+    alternatives.sort((a, b) => b.score - a.score);
+    if (alternatives.length > 2) alternatives.pop();
+  }
   const home = await homeOf(origin).catch(() => ({ feeds: [], links: [] }));
   for (const url of [...new Set(home.feeds)]) {
     const feed = await cached('feed|' + url, FEED_CACHE_MS, () => readFeed(url)).catch(() => null);
     const hit = feed && feed.items.find(i => i.link && onSite.sameHeadline(i.title, title));
     if (hit) return hit.link;
   }
-  const linked = onSite.findInLinks(home.links, title);
+  const linked = onSite.findInLinks(home.links, title, consider);
   if (linked) return linked;
   const search = `${origin}/?s=${encodeURIComponent(title.slice(0, 100))}&feed=rss2`;
   const found = await readFeed(search).catch(() => null);
@@ -394,10 +404,17 @@ async function findOnSite(site, title) {
     const links = onSite.siteLinks(searchPage.text, searchPage.url);
     const match = links.find(l => onSite.sameHeadline(l.text, title) && onSite.publisherAddress(l.url, origin));
     if (match) return match.url;
+    for (const link of links) consider(link.url, onSite.slugMatch(link.url, title));
   }
   for (const url of await sitemapsOf(origin).catch(() => [])) {
-    const address = onSite.findInSitemap(await readSitemap(url).catch(() => ''), title);
+    const address = onSite.findInSitemap(await readSitemap(url).catch(() => ''), title, consider);
     if (address) return address;
+  }
+  for (const candidate of alternatives) {
+    const page = await fetchPage(candidate.url).catch(() => null);
+    if (!page || !onSite.publisherAddress(page.url, origin)) continue;
+    const heading = htmlToText((/<h1\b[^>]*>([\s\S]*?)<\/h1>/i.exec(page.text) || [])[1] || '');
+    if ([heading, articleTitle(page.text)].some(t => t && foldHeadline(t) === foldHeadline(title))) return page.url;
   }
   // Some publishers have neither WordPress nor a usable sitemap. Bing News also indexes
   // publisher links, sometimes wrapped in its own click-through URL.

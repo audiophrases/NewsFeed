@@ -12,6 +12,10 @@ const confirmedStories = [{
   title: 'Un ferit greu i dos de lleus en incendiar-se un pis a Torredembarra (Tarragona)',
   day: '2026-11-26',
   url: 'https://www.aldia.cat/gent/noticia-ferit-greu-dos-lleus-incendiar-pis-torredembarra-tarragona-20261126182042.html',
+}, {
+  title: 'Un herido grave y dos leves en el incendio de un piso en Torredembarra, Tarragona',
+  day: '2026-11-26',
+  url: 'https://www.telecinco.es/noticias/catalunya/20261126/herido-grave-incendio-torredembarra-tarragona_18_020827795.html',
 }];
 
 function confirmedPublisherLink(link, { title, site, publishedAt } = {}) {
