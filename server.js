@@ -36,6 +36,7 @@ const MAX_EDITIONS = 25;
 const SEARCH_SLOTS = 3;
 // Where news and feed searches go; the tests point these at a local site.
 const googleNews = () => process.env.GOOGLE_NEWS_URL || 'https://news.google.com/rss/search';
+const bingNews = () => process.env.BING_NEWS_URL || 'https://www.bing.com/news/search';
 const feedSearch = () => process.env.FEED_SEARCH_URL || 'https://cloud.feedly.com/v3/search/feeds';
 const googleNewsSite = () => process.env.GOOGLE_NEWS_SITE || 'https://news.google.com';
 /** The sync service (sync/worker.mjs) the page signs in to, if this server has one: SYNC_URL. */
@@ -113,7 +114,7 @@ async function searchNews(q, lang, country) {
     try {
       return await inSearchSlot(() => readFeed(google));
     } catch (e2) {
-      const bing = 'https://www.bing.com/news/search?format=rss&q=' + encodeURIComponent(q)
+      const bing = bingNews() + '?format=rss&q=' + encodeURIComponent(q)
           + `&setlang=${lang}&cc=${country}`;
       return inSearchSlot(() => readFeed(bing));
     }
@@ -282,7 +283,7 @@ let googlePausedUntil = 0;
  * Where a Google News article link leads: asked of Google the way its own article page asks in
  * a browser (the page carries a signature for it). Only for an article someone opens.
  */
-async function articleAddress(link) {
+async function articleAddress(link, site) {
   const id = googleLinks.articleId(link);
   const inside = googleLinks.addressInside(id);
   if (inside) return inside;
@@ -290,6 +291,7 @@ async function articleAddress(link) {
     if (Date.now() < googlePausedUntil) throw new FetchError('Google News isn’t answering NewsFeed’s lookups just now');
     try {
       const page = await getText(`${googleNewsSite()}/rss/articles/${id}`, {}, 1024 * 1024);
+      if (new URL(page.url).origin !== new URL(googleNewsSite()).origin && onSite.publisherAddress(page.url, site)) return page.url;
       const signature = googleLinks.signatureOf(page.text);
       if (!signature) throw new FetchError('Google News didn’t say where this article is');
       const answer = await postText(`${googleNewsSite()}/_/DotsSplashUi/data/batchexecute`, googleLinks.lookupBody(id, signature));
@@ -299,6 +301,8 @@ async function articleAddress(link) {
     } catch (e) {
       // Refused, or sent elsewhere instead of answered (a check for unusual traffic, a consent
       // page): leave Google alone for a while rather than insist.
+      if (e.requestUrl && new URL(e.requestUrl).origin !== new URL(googleNewsSite()).origin &&
+          onSite.publisherAddress(e.requestUrl, site)) return e.requestUrl;
       if (/HTTP (30[1-8]|403|429)/.test(e.message)) {
         googlePausedUntil = Date.now() + GOOGLE_PAUSE_MS;
         console.warn(`Google News refused a lookup (${e.message}); pausing lookups for ${GOOGLE_PAUSE_MS / 60000} min`);
@@ -365,11 +369,28 @@ async function findOnSite(site, title) {
   const found = await readFeed(search).catch(() => null);
   const hit = found && found.items.find(i => i.link && onSite.sameHeadline(i.title, title));
   if (hit) return hit.link;
+  // A shorter query tolerates punctuation and small edits. Compare the full result title.
+  const terms = (title.match(/[\p{L}\p{N}]{4,}/gu) || []).slice(0, 4).join(' ') || title;
+  const wp = new URL('/wp-json/wp/v2/search', origin);
+  wp.search = new URLSearchParams({ search: terms, type: 'post', per_page: '20' });
+  const results = await getText(wp.href, { Accept: 'application/json' }, 128 * 1024)
+      .then(page => JSON.parse(page.text)).catch(() => null);
+  const post = Array.isArray(results) && onSite.publisherResult(results, title, origin);
+  if (post) return post;
   for (const url of await sitemapsOf(origin).catch(() => [])) {
     const address = onSite.findInSitemap(await readSitemap(url).catch(() => ''), title);
     if (address) return address;
   }
-  return null;
+  // Some publishers have neither WordPress nor a usable sitemap. Bing News also indexes
+  // publisher links, sometimes wrapped in its own click-through URL.
+  const query = new URLSearchParams({ format: 'rss', q: `site:${new URL(origin).hostname} ${title}` });
+  const news = await inSearchSlot(() => readFeed(`${bingNews()}?${query}`)).catch(() => null);
+  const candidates = (news?.items || []).map(item => {
+    let url = item.link;
+    if (url && /^(?:https?:\/\/)(?:[\w-]+\.)*bing\.com\//i.test(url)) url = new URL(url).searchParams.get('url');
+    return { title: item.title, url };
+  });
+  return onSite.publisherResult(candidates, title, origin);
 }
 
 /**
@@ -378,12 +399,12 @@ async function findOnSite(site, title) {
  */
 async function locate(link, title, site) {
   try {
-    return await articleAddress(link);
+    return await articleAddress(link, site);
   } catch (e) {
     if (!title || !site) throw e;
     const found = await findOnSite(site, title).catch(() => null);
     if (found) return found;
-    throw new FetchError(`${e.message}, and ${new URL(site).hostname.replace(/^www\./, '')} doesn’t list it on its home page, in its feeds or in its sitemaps`);
+    throw new FetchError(`${e.message}. NewsFeed couldn’t find a matching article on ${new URL(site).hostname.replace(/^www\./, '')}`);
   }
 }
 
@@ -409,6 +430,9 @@ function fetchPage(url) {
       throw new Error('Not a web page');
     }
     return page;
+  }).catch(error => {
+    if (error.requestUrl) error.articleUrl = url;
+    throw error;
   });
   pages.delete(url);
   pages.set(url, { at: Date.now(), promise });
@@ -468,7 +492,8 @@ async function api(res, what, work) {
   } catch (e) {
     const why = reason(e);
     console.warn(`${what}: ${why}`);
-    return json(res, 502, { error: why });
+    const page = e.articleUrl ? { articleUrl: e.articleUrl, frameable: e.frameable } : {};
+    return json(res, 502, { error: why, ...page });
   }
 }
 

@@ -162,7 +162,12 @@ async function getJson(url) {
   } catch (e) {
     throw new Error(`HTTP ${res.status}`);
   }
-  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    const error = new Error(body.error || `HTTP ${res.status}`);
+    error.articleUrl = body.articleUrl;
+    error.frameable = body.frameable;
+    throw error;
+  }
   return body;
 }
 
@@ -945,7 +950,7 @@ function explainFailure(message, site) {
   if (/Timed out/.test(message)) return `${site} took too long to answer.`;
   if (/Not a web page/.test(message)) return 'The link doesn’t lead to a web page.';
   // The lookup of a topic's article: Google's own words, as the server puts them.
-  if (/Google News/.test(message)) return `${message}, so the article can’t be loaded here.`;
+  if (/Google News/.test(message)) return `${message}.`;
   return `The article couldn’t be loaded (${message}).`;
 }
 
@@ -973,6 +978,13 @@ const saveLinks = () => store(KEY_LINKS, [...knownLinks].slice(-LINKS_LIMIT));
 
 /** The article's own address when known (a topic's articles come as Google News links). */
 const articleLink = a => (a.link && knownLinks.get(a.link)) || a.link;
+
+function rememberPublisher(a, address) {
+  if (!isGoogleNews(a.link) || !canFetch(address) || isGoogleNews(address)) return;
+  knownLinks.delete(a.link);
+  knownLinks.set(a.link, address);
+  saveLinks();
+}
 
 /** Articles whose site refused for good (subscribers only, blocked, gone), by key: the reason. */
 const refusals = new Map();
@@ -1020,10 +1032,14 @@ async function loadFullText(a) {
     // if Google won't say where it leads.
     result = await getJson(`/api/article?url=${encodeURIComponent(link)}${lookupParams(a, link)}`);
   } catch (e) {
+    rememberPublisher(a, e.articleUrl);
+    if (e.frameable === false) frameRefused.add(a.key);
     if (selectedKey === a.key) {
-      const why = explainFailure(e.message, a.sourceName);
+      $('open-original').href = articleLink(a);
+      const why = explainFailure(e.message, a.sourceName) +
+          (e.frameable === false ? ' The publisher also blocks embedded pages.' : '');
       // Asking again won't change a subscribers-only, blocked or deleted page; a timeout might pass.
-      const final = /HTTP (40[1-4]|410)|Google News isn’t answering/.test(e.message);
+      const final = /HTTP (40[1-4]|410)/.test(e.message) && !isGoogleNews(articleLink(a));
       if (final) refusals.set(a.key, why);
       setStatus('summary', shownSoFar(a), why);
       readerActions(a, '', undefined, !final);
@@ -1032,11 +1048,8 @@ async function loadFullText(a) {
     }
     return;
   }
-  if (isGoogleNews(link) && result.url && !isGoogleNews(result.url)) {
-    knownLinks.delete(a.link);
-    knownLinks.set(a.link, result.url);
-    saveLinks();
-  }
+  rememberPublisher(a, result.url);
+  if (result.frameable === false) frameRefused.add(a.key);
   fullTexts.set(a.key, result);
   if (selectedKey === a.key) {
     $('open-original').href = articleLink(a);

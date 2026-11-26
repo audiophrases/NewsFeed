@@ -61,8 +61,9 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   refuses a lookup (or redirects it, as it may for servers in data centres) the server leaves it
   alone for 30 minutes. When Google won't say, the article is looked for on its own site by its
   headline: in the site's feeds, among the links on its home page (some sites' feeds are years
-  out of date), in its WordPress search and in its sitemaps. This finds some outlets' articles,
-  not older ones on a site whose feed, sitemaps and home page don't list them.
+  out of date), in its WordPress search feed and public search index, and in its sitemaps. If those
+  miss, NewsFeed searches Bing News for the headline on the publisher's domain and checks the
+  result against the headline and outlet. Some headlines have no matching public result.
 - **Edit** – the ✎ next to *Topics* or *Sources* lists everything you follow: type to rename
   (empty gives back the original name), reorder with the arrows or by dragging the handle, remove,
   or open more settings: a feed's flag, language and address; a Google News source's site, edition
@@ -97,7 +98,8 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
     but not readers), or the reading view has nothing either, the reader shows the article's page
     in a frame, loaded by your browser as if you had opened it. It can't be reformatted (browsers
     don't let one site change another's page) and stays in NewsFeed (it can't take over the tab).
-    Sites that forbid frames (`X-Frame-Options`, CSP `frame-ancestors`) get a link instead.
+    This also works for resolved Google News links when the publisher refuses the server's request
+    for text. Sites that forbid frames (`X-Frame-Options`, CSP `frame-ancestors`) get a link instead.
   - The 🌐 button (or `w`) switches any article to its site's page and back.
   Reading an article from an outlet you don't follow yet (from a topic, a search or a saved
   article), **+ Add source** next to its name adds that outlet. It finds the feeds on the outlet's

@@ -16,6 +16,7 @@ const FIXTURES = path.join(__dirname, 'fixtures');
 const pageHits = {};
 /** What the stand-in Google News was asked: lookups it answered. */
 const lookups = [];
+const headline = 'La CADPV acusa la Conselleria de fer de la Inspecció una eina de censura';
 
 /** Stands in for Google News' article pages and the lookup they make (see lib/googlenews.js). */
 function googleNews(req, res, u) {
@@ -41,6 +42,11 @@ function googleNews(req, res, u) {
     return true;
   }
   if (u.pathname.startsWith('/rss/articles/')) {
+    if (u.pathname.includes('PublisherRedirect')) {
+      res.writeHead(302, { Location: 'http://localhost:' + u.port + '/story' });
+      res.end();
+      return true;
+    }
     const signed = !u.pathname.includes('NoSignature');
     res.end(`<html><body><c-wiz ${signed ? 'data-n-a-sg="SIG-OK" data-n-a-ts="1764081234"' : ''}></c-wiz></body></html>`);
     return true;
@@ -85,6 +91,24 @@ const site = http.createServer((req, res) => {
     return res.end(PNG);
   }
   const u = new URL(req.url, siteUrl);
+  if (u.pathname === '/wp-json/wp/v2/search') {
+    const matches = u.searchParams.get('search') === 'CADPV acusa Conselleria Inspecció';
+    return res.end(JSON.stringify(matches ? [
+      { title: headline, url: 'https://other.example/copy' },
+      { title: headline, url: `http://${req.headers.host}/story` },
+    ] : []));
+  }
+  if (u.pathname === '/bing-news') {
+    const title = 'A local publisher shares the council minutes';
+    const match = u.searchParams.get('q') === 'site:localhost ' + title;
+    return res.end(`<rss><channel><title>News</title>${match ? `<item><title>${title}</title>
+      <link>https://www.bing.com/news/apiclick?url=${encodeURIComponent('http://localhost:' + new URL(siteUrl).port + '/restricted')}</link>
+      </item>` : ''}</channel></rss>`);
+  }
+  if (u.pathname === '/restricted' || u.pathname === '/restricted-noframe') {
+    res.writeHead(403, u.pathname.endsWith('-noframe') ? { 'X-Frame-Options': 'DENY' } : {});
+    return res.end();
+  }
   if (u.pathname === '/gnews') return res.end(newsSearchXml(u.searchParams.get('q'), u.searchParams.get('hl')));
   if (u.pathname === '/feedly') return res.end(JSON.stringify(feedSearchJson()));
   const route = routes[req.url];
@@ -122,6 +146,7 @@ test.before(async () => {
   siteUrl = `http://127.0.0.1:${site.address().port}`;
   appUrl = `http://127.0.0.1:${server.address().port}`;
   process.env.GOOGLE_NEWS_URL = siteUrl + '/gnews';
+  process.env.BING_NEWS_URL = siteUrl + '/bing-news';
   process.env.FEED_SEARCH_URL = siteUrl + '/feedly';
   process.env.GOOGLE_NEWS_SITE = siteUrl;
 });
@@ -297,6 +322,13 @@ test('when Google News doesn\'t say where an article is, the reader is told so',
   assert.match(body.error, /Google News didn’t say where this article is/);
 });
 
+test('a Google News redirect straight to the publisher opens without a headline search', async () => {
+  const site = 'http://localhost:' + new URL(siteUrl).port;
+  const found = await api('/api/article', { url: siteUrl + '/rss/articles/CBMiPublisherRedirect_0001', site });
+  assert.equal(found.status, 200);
+  assert.equal(found.body.url, site + '/story');
+});
+
 test('a lookup sent elsewhere (a check for unusual traffic) counts as refused, and says where it went', async () => {
   const asked = lookups.length;
   const { status, body } = await api('/api/article', { url: `${siteUrl}/rss/articles/CBMiRedirected_0000000005` });
@@ -332,8 +364,26 @@ test('when Google News won\'t say, the article is found on its own site by its h
   assert.equal(linked.body.url, site + '/story');
   const missing = await api('/api/article', { url: `${siteUrl}/rss/articles/CBMiNotOnSite_00000000008`, title: 'A headline nobody published', site });
   assert.equal(missing.status, 502);
-  assert.match(missing.body.error,
-      /isn’t answering NewsFeed’s lookups just now, and localhost doesn’t list it on its home page, in its feeds or in its sitemaps/);
+  assert.match(missing.body.error, /couldn’t find a matching article on localhost/);
+  assert.equal(missing.body.articleUrl, undefined);
+});
+
+test('a headline missing from feeds and sitemaps opens from the publisher search index', async () => {
+  const site = 'http://localhost:' + new URL(siteUrl).port;
+  const found = await api('/api/article', { url: siteUrl + '/rss/articles/CBMiNoSignature_00000012', title: headline, site });
+  assert.equal(found.status, 200);
+  assert.equal(found.body.url, site + '/story');
+  assert.ok(found.body.words > 50);
+});
+
+test('an indexed publisher URL survives a refused text request for the embedded view', async () => {
+  const site = 'http://localhost:' + new URL(siteUrl).port;
+  const found = await api('/api/article', { url: siteUrl + '/rss/articles/CBMiNoSignature_00000013',
+    title: 'A local publisher shares the council minutes', site });
+  assert.equal(found.status, 502);
+  assert.deepEqual(found.body, { error: 'HTTP 403', articleUrl: site + '/restricted', frameable: true });
+  const blocked = await api('/api/article', { url: site + '/restricted-noframe' });
+  assert.equal(blocked.body.frameable, false);
 });
 
 test('a page for a reading view: fetched once with its article, scripts and styles left out', async () => {
