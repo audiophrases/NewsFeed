@@ -15,6 +15,8 @@ const KEY_SAVED = 'newsfeed.saved';
 const KEY_PREFS = 'newsfeed.prefs';
 const KEY_LINKS = 'newsfeed.links';
 const KEY_SYNC = 'newsfeed.sync';
+/** In the NewsFeed app: the sign-in it asked Chrome for, { nonce, at }, until the answer comes. */
+const KEY_APP_SIGNIN = 'newsfeed.appSignin';
 /** Google News links whose article address is remembered, at most. */
 const LINKS_LIMIT = 3000;
 
@@ -1488,6 +1490,8 @@ function fromPhone(data) {
   } catch (e) {
     return;
   }
+  // A sign-in Chrome sent back to the app (see appSigninLink): not about an article.
+  if (message.type === 'signin') return appSigninCame(message);
   const read = phoneRead;
   if (!read || message.id !== read.id) return;
   const a = articleByKey(read.key);
@@ -2792,6 +2796,14 @@ function showSync() {
       if (addMode === 'sync' && $('add-dialog').open) showSync();
     }), button('primary-text', 'Sign out', () => signOut()));
     body.push(actions);
+  } else if (inApp) {
+    body.push(el('p', 'help', 'Sign in with Google on each of your devices to keep what you follow, what you’ve read '
+        + 'and what you’ve saved the same on all of them. What this phone has joins your account.'),
+    el('p', 'help', 'Google doesn’t sign in inside apps, so you sign in in Chrome, on NewsFeed’s web version, '
+        + 'then come back here.'));
+    const actions = el('div', 'sync-actions');
+    actions.append(appSigninLink());
+    body.push(actions);
   } else {
     const box = el('div', 'google-button');
     const status = el('p', 'help');
@@ -2828,37 +2840,111 @@ function loadGoogleScript() {
   return googleScript;
 }
 
-/** Google's sign-in button, for the sync service's Google client (PinPlay's). */
-async function renderGoogleButton(box) {
+/** Google's sign-in button, for the sync service's Google client (PinPlay's); onCredential gets Google's answer. */
+async function renderGoogleButton(box, onCredential = signIn) {
   try {
     const [config] = await Promise.all([getJson(syncUrl + '/config'), loadGoogleScript()]);
     if (!config.ready) return syncStatus('Sync isn’t set up on this server yet.');
-    google.accounts.id.initialize({ client_id: config.googleClientId, callback: r => signIn(r.credential) });
+    google.accounts.id.initialize({ client_id: config.googleClientId, callback: r => onCredential(r.credential) });
     google.accounts.id.renderButton(box, { theme: 'filled_blue', size: 'large', text: 'signin_with', shape: 'pill' });
   } catch (e) {
     syncStatus(`Google sign-in couldn’t load: ${e.message}`);
   }
 }
 
+/** The sync service's sign-in for what Google said: { token, email, name, expiresAt }. */
+async function syncLogin(credential) {
+  const res = await fetch(syncUrl + '/login', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ googleIdToken: credential }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
 /** Google said who you are: the sync service checks it and signs this device in. */
 async function signIn(credential) {
   syncStatus('Signing in…');
   try {
-    const res = await fetch(syncUrl + '/login', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ googleIdToken: credential }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    account = { token: data.token, email: data.email, name: data.name, expiresAt: data.expiresAt, since: 0, base: [], sourcesV: 0 };
-    pending = noChanges();
-    queueEverything();
-    saveSync();
-    await syncNow();
-    if (addMode === 'sync' && $('add-dialog').open) showSync();
-    toast(syncError ? `Signed in, but couldn’t sync yet: ${syncError}` : `Synced with ${data.email}`);
+    await signedIn(await syncLogin(credential));
   } catch (e) {
     syncStatus(`Couldn’t sign in: ${e.message}`);
   }
+}
+
+/** Signed in to the sync service ({ token, email, name, expiresAt }): everything here joins the account. */
+async function signedIn(data) {
+  account = { token: data.token, email: data.email, name: data.name, expiresAt: data.expiresAt, since: 0, base: [], sourcesV: 0 };
+  pending = noChanges();
+  queueEverything();
+  saveSync();
+  renderSyncButton();
+  await syncNow();
+  if (addMode === 'sync' && $('add-dialog').open) showSync();
+  toast(syncError ? `Signed in, but couldn’t sync yet: ${syncError}` : `Synced with ${data.email}`);
+}
+
+// ---- signing the NewsFeed app in ------------------------------------------------------------
+//
+// Google doesn't sign in inside apps (and its sign-in only works on the sites it was told of),
+// so the app (android/) signs in through Chrome: its Sync opens NewsFeed's web version with a
+// one-time code (?app-signin=…); there you sign in with Google, the sync service signs the app
+// in, and a link (newsfeed://signin) takes its sign-in back to the app, with the code. The app
+// takes only the sign-in it asked for: a site can't sign it in to someone else's account.
+
+/** In the app: the link that opens NewsFeed's web version in Chrome, to sign in there. */
+function appSigninLink() {
+  const nonce = [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
+  const link = el('a', 'primary', 'Sign in with Google in Chrome');
+  link.href = `${inApp.webUrl}?${new URLSearchParams({ 'app-signin': nonce })}`;
+  link.target = '_blank';
+  link.rel = 'noopener';
+  link.addEventListener('click', () => store(KEY_APP_SIGNIN, { nonce, at: Date.now() }));
+  return link;
+}
+
+/** In the app: the sign-in Chrome sent back (the app hands it over); taken if it's the one asked for. */
+async function appSigninCame(message) {
+  const asked = load(KEY_APP_SIGNIN, null);
+  if (!asked || asked.nonce !== message.nonce || !(Date.now() - asked.at < 30 * 60 * 1000)) {
+    toast('That sign-in wasn’t asked for here: tap Sync to sign in');
+    return;
+  }
+  store(KEY_APP_SIGNIN, null);
+  if (!message.token || !message.email) return;
+  await started;
+  await signedIn({ token: message.token, email: message.email, name: message.name || '', expiresAt: Number(message.expiresAt) || 0 });
+}
+
+/** On the web version, opened by the app with its code: sign in with Google for the app. */
+function showAppSignin(nonce) {
+  addMode = 'app-signin';
+  setStep('Sign in the NewsFeed app', null, false);
+  const box = el('div', 'google-button');
+  const status = el('p', 'help');
+  status.id = 'sync-status';
+  $('add-body').replaceChildren(
+      el('p', 'help', 'The NewsFeed app asked you to sign in here, as Google doesn’t sign in inside apps. Choose '
+          + 'your Google account, then go back to the app: it syncs with that account. This browser stays as it is.'),
+      box, status);
+  renderGoogleButton(box, async credential => {
+    syncStatus('Signing in…');
+    let data;
+    try {
+      data = await syncLogin(credential);
+    } catch (e) {
+      return syncStatus(`Couldn’t sign in: ${e.message}`);
+    }
+    const back = new URLSearchParams({ nonce, token: data.token, email: data.email, name: data.name || '',
+      expiresAt: String(data.expiresAt) });
+    const link = el('a', 'primary', 'Back to the NewsFeed app');
+    // Chrome opens the app for this link (and only the app: it's named).
+    link.href = `intent://signin?${back}#Intent;scheme=newsfeed;package=com.eugen.newsfeed;end`;
+    const actions = el('div', 'sync-actions');
+    actions.append(link);
+    $('add-body').replaceChildren(el('p', 'help', `Signed in as ${data.email}. Go back to the app to finish.`), actions);
+  });
+  if (!$('add-dialog').open) $('add-dialog').showModal();
 }
 
 /** NewsFeed's own export, or OPML from another feed reader. */
@@ -3063,10 +3149,13 @@ function upgradeView(view, replaced) {
   return sources.some(s => sid(s) === id) ? view : 'all';
 }
 
+/** In the NewsFeed app, once started: the API on the phone, and where NewsFeed's web version is (webUrl). */
+let inApp = null;
+
 async function start() {
   // In the NewsFeed app: the API on the phone, and what the app kept before it ran without a server.
   try {
-    await localApi;
+    inApp = await localApi;
   } catch (e) {
     toast(`NewsFeed couldn’t start: ${e.message}`);
   }
@@ -3163,6 +3252,13 @@ async function start() {
   render();
   renderSyncButton();
   refresh();
+  // Opened by the NewsFeed app to sign it in (see appSigninLink).
+  const appSignin = new URLSearchParams(location.search).get('app-signin');
+  if (!inApp && syncUrl && /^[0-9a-f]{32}$/.test(appSignin || '')) {
+    history.replaceState(null, '', location.pathname + location.hash);
+    showAppSignin(appSignin);
+  }
 }
 
-start();
+/** NewsFeed started: what you follow, read and saved is loaded, and sync is set up. */
+const started = start();

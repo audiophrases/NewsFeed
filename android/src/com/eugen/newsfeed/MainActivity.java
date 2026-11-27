@@ -166,6 +166,8 @@ public class MainActivity extends Activity {
     private String token;
     /** Fetches go as the phone's browser view (whose cookies they share). */
     private String userAgent;
+    /** A sync sign-in Chrome sent back (newsfeed://signin), for NewsFeed's page once it's there. */
+    private JSONObject signin;
 
     /** The article being read: its id from NewsFeed, and how far it got. */
     private int readId;
@@ -239,6 +241,7 @@ public class MainActivity extends Activity {
         listenForBack();
 
         CookieManager.getInstance().setAcceptCookie(true);
+        signinFrom(getIntent());
         // Back where it was (the page as you left it), unless that was NewsFeed from its server.
         WebBackForwardList restored = state == null ? null : main.restoreState(state);
         if (restored == null || restored.getCurrentItem() == null
@@ -252,15 +255,54 @@ public class MainActivity extends Activity {
         main.loadUrl(appUri.toString());
     }
 
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        signinFrom(intent);
+    }
+
     /**
-     * Before the app carried NewsFeed's page, it showed it from NewsFeed's server (moved_from),
+     * Google doesn't sign in inside apps, so NewsFeed's page signs in to sync through Chrome, on
+     * NewsFeed's web version, which sends the sign-in back as newsfeed://signin?nonce=…&token=…
+     * (see appSigninLink in app.js). It goes to the page, which takes it only if it asked for it
+     * (the nonce): any site could send such a link.
+     */
+    private void signinFrom(Intent intent) {
+        Uri data = intent == null ? null : intent.getData();
+        if (data == null || !"newsfeed".equals(data.getScheme()) || !"signin".equals(data.getHost())) return;
+        JSONObject message = new JSONObject();
+        try {
+            message.put("type", "signin");
+            for (String name : new String[] { "nonce", "token", "email", "name", "expiresAt" }) {
+                String value = data.getQueryParameter(name);
+                if (value != null) message.put(name, value);
+            }
+        } catch (JSONException e) {
+            return;
+        }
+        // Not again if the app is opened anew from the same intent (a restored activity).
+        intent.setData(null);
+        signin = message;
+        handSignin();
+    }
+
+    private void handSignin() {
+        if (signin == null || port == null) return;
+        if (showing) closedByYou();
+        send(signin);
+        signin = null;
+    }
+
+    /**
+     * Before the app carried NewsFeed's page, it showed it from NewsFeed's server (web_url),
      * and what you follow, read and saved was kept under that address. Once, it's read from there
      * (the old address is answered by the app, so nothing is fetched) for NewsFeed's page to take
      * over (/app/config.json), and then NewsFeed opens.
      */
     private void moveOldDataThenOpen() {
         SharedPreferences prefs = getSharedPreferences("newsfeed", MODE_PRIVATE);
-        Uri from = Uri.parse(getString(R.string.moved_from));
+        Uri from = Uri.parse(getString(R.string.web_url));
         String oldOrigin = originOf(from);
         if (prefs.getBoolean("looked-for-old-data", false) || oldOrigin.isEmpty()) {
             open();
@@ -554,6 +596,7 @@ public class MainActivity extends Activity {
         try {
             config.put("token", token);
             config.put("syncUrl", getString(R.string.sync_url));
+            config.put("webUrl", getString(R.string.web_url));
             File moved = movedFile();
             if (moved.exists()) {
                 byte[] bytes = new byte[(int) moved.length()];
@@ -827,6 +870,7 @@ public class MainActivity extends Activity {
             }
         }, ui);
         main.postWebMessage(new WebMessage(HELLO, new WebMessagePort[] { ports[1] }), Uri.parse(appOrigin));
+        handSignin();
     }
 
     private void receive(String data) {

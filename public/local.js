@@ -5,8 +5,9 @@
 'use strict';
 
 /**
- * In the app, a promise of { fetch(url, init), iconUrl(origin) }: the API's answer to a request
- * for /api/… (as a Response), and a site's icon (an address for an <img>, or null). Elsewhere null.
+ * In the app, a promise of { fetch(url, init), iconUrl(origin), webUrl }: the API's answer to a
+ * request for /api/… (as a Response), a site's icon (an address for an <img>, or null), and where
+ * NewsFeed's web version is (the app signs in to sync there). Elsewhere null.
  */
 const localApi = (() => {
   /** Where the NewsFeed app serves this page from. */
@@ -36,7 +37,7 @@ const localApi = (() => {
       return new Response(result.bytes || null, { status: result.status, headers: { 'Content-Type': result.type || 'text/plain' } });
     }
 
-    return { fetch: apiFetch, iconUrl: iconFinder(api) };
+    return { fetch: apiFetch, iconUrl: iconFinder(api), webUrl: config.webUrl || '' };
   }
 
   /**

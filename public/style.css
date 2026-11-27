@@ -691,6 +691,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .6); }
 .dialog-body .sync-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 16px; }
 
 .dialog-body .sync-actions .primary { margin: 0; }
+.dialog-body a.primary { display: inline-flex; align-items: center; text-decoration: none; }
 
 /* A site's name above its feeds in source search results. */
 .dialog-body .group-head { padding: 14px 12px 4px; font-size: 13px; font-weight: 600; color: var(--muted); }

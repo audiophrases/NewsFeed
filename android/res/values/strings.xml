@@ -3,8 +3,10 @@
     <string name="app_name">NewsFeed</string>
     <!-- The sync service (sync/worker.mjs) NewsFeed signs in to; empty for none. -->
     <string name="sync_url" translatable="false">https://newsfeed-sync.eugenime.workers.dev</string>
-    <!-- Where the app used to show NewsFeed from (its server): what you kept there comes over once. -->
-    <string name="moved_from" translatable="false">https://newsfeed-7m73.onrender.com/</string>
+    <!-- NewsFeed's web version (its server). The app signs in to sync there, in Chrome, as Google
+         doesn't sign in inside apps. Earlier versions of the app showed NewsFeed from it: what
+         you kept there comes over once. -->
+    <string name="web_url" translatable="false">https://newsfeed-7m73.onrender.com/</string>
     <string name="connecting">Opening NewsFeed…</string>
     <string name="unreachable">Couldn’t reach NewsFeed. Tap to try again.</string>
     <string name="back_to_newsfeed">Back to NewsFeed</string>
