@@ -3,3 +3,7 @@ node_modules/
 # The sync worker's local secrets and state (wrangler dev)
 .dev.vars
 .wrangler/
+
+# The Android app: build output, and its signing key (keep a copy of it, but not in git)
+android/build/
+android/*.keystore

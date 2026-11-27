@@ -111,7 +111,11 @@ const site = http.createServer((req, res) => {
   }
   if (u.pathname === aldiaPath) return res.end(fs.readFileSync(path.join(FIXTURES, 'article.html')));
   if (u.pathname === '/wp-json/wp/v2/search') {
-    const matches = u.searchParams.get('search') === 'CADPV';
+    const search = u.searchParams.get('search');
+    if (search === 'local publisher shares council') {
+      return res.end(JSON.stringify([{ title: 'A local publisher shares the council minutes', url: `http://${req.headers.host}/restricted` }]));
+    }
+    const matches = search === 'CADPV';
     return res.end(JSON.stringify(matches ? [
       { title: headline, url: 'https://other.example/copy' },
       { title: headline, url: `http://${req.headers.host}/story` },
@@ -122,13 +126,6 @@ const site = http.createServer((req, res) => {
   }
   if (u.pathname === '/' && u.searchParams.get('p') === '253') {
     return res.end(fs.readFileSync(path.join(FIXTURES, 'article.html')));
-  }
-  if (u.pathname === '/bing-news') {
-    const title = 'A local publisher shares the council minutes';
-    const match = u.searchParams.get('q') === 'site:localhost ' + title;
-    return res.end(`<rss><channel><title>News</title>${match ? `<item><title>${title}</title>
-      <link>https://www.bing.com/news/apiclick?url=${encodeURIComponent('http://localhost:' + new URL(siteUrl).port + '/restricted')}</link>
-      </item>` : ''}</channel></rss>`);
   }
   if (u.pathname === '/restricted' || u.pathname === '/restricted-noframe') {
     res.writeHead(403, u.pathname.endsWith('-noframe') ? { 'X-Frame-Options': 'DENY' } : {});
@@ -163,20 +160,30 @@ const feedSearchJson = () => ({ results: [
 /** The start of a PNG file: enough for the server to recognise it as an image. */
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000200000002008060000007a7af4', 'hex');
 
-let siteUrl, appUrl;
+/** A site behind Cloudflare's bot check, as servers see it: every page a challenge. */
+const guardedHits = [];
+const guarded = http.createServer((req, res) => {
+  guardedHits.push(req.url);
+  res.writeHead(403, { 'cf-mitigated': 'challenge', Server: 'cloudflare', 'Content-Type': 'text/html' });
+  res.end('<html><title>Just a moment...</title></html>');
+});
+
+let siteUrl, appUrl, guardedUrl;
 
 test.before(async () => {
   await new Promise(r => site.listen(0, '127.0.0.1', r));
   await new Promise(r => server.listen(0, '127.0.0.1', r));
+  await new Promise(r => guarded.listen(0, '127.0.0.1', r));
+  guardedUrl = `http://127.0.0.1:${guarded.address().port}`;
   siteUrl = `http://127.0.0.1:${site.address().port}`;
   appUrl = `http://127.0.0.1:${server.address().port}`;
   process.env.GOOGLE_NEWS_URL = siteUrl + '/gnews';
-  process.env.BING_NEWS_URL = siteUrl + '/bing-news';
   process.env.FEED_SEARCH_URL = siteUrl + '/feedly';
   process.env.GOOGLE_NEWS_SITE = siteUrl;
 });
 
 test.after(() => {
+  guarded.close();
   site.close();
   server.close();
 });
@@ -419,8 +426,7 @@ test('a publisher HTML search finds the headline when its feeds and REST index m
   assert.equal(found.body.url, site + '/?p=253');
 });
 
-test('the reported Diari La Veu link loads its confirmed publisher URL with Google unavailable', async t => {
-  const url = 'https://news.google.com/rss/articles/CBMitgFBVV95cUxNSUhiSnNhZVY0MXFObGQyS0E5X2VNc0JQb0x0STJsazBEZHd6dnp2SFk5Sm5TUTR2TUFLUTNnNW82emdTRDVCa1l5RVF2YWNEM0tKVHRaLWhNUE94OHJnT3ZYZ1ZPUXQtbVVfRjBsLWw0VG5ma3ZJa2FnOGNMX2ZVSmRzd2p5Rkg1OC1PMFJnSTFISGZ0UXVrNVRPcTVRM3NIX3ZmOVBKOUNFQUdoUlBfVTV3R1lfZw?oc=5';
+test('a publisher page refused with 403 opens from its public WordPress post', async t => {
   const publisher = 'https://www.diarilaveu.cat/societat/docents-acusen-orti-de-convertir-la-inspeccio-en-una-policia-ideologica-659514/';
   const fetch = globalThis.fetch;
   let publisherReads = 0;
@@ -433,7 +439,7 @@ test('the reported Diari La Veu link loads its confirmed publisher URL with Goog
     publisherReads++;
     return Promise.resolve(new Response('Unavailable', { status: 403 }));
   });
-  const found = await api('/api/article', { url });
+  const found = await api('/api/article', { url: publisher });
   assert.equal(found.status, 200);
   assert.equal(found.body.url, publisher);
   assert.ok(found.body.words > 50);
@@ -449,26 +455,6 @@ test('an outlet with its own search form finds a story missing from its feeds', 
   assert.equal(result.body.url, site + aldiaPath);
 });
 
-test('the Al Dia report uses the confirmed permalink for its outlet, headline and publication day', async t => {
-  const { confirmedPublisherLink } = require('../public/publisher');
-  const url = 'https://news.google.com/rss/articles/CBMiOpaqueLinkForFixture2026';
-  const publisher = 'https://www.aldia.cat' + aldiaPath;
-  const article = { site: 'https://aldia.cat', title: aldiaTitle, publishedAt: Date.parse('2026-11-26T17:20:42Z') };
-  assert.equal(confirmedPublisherLink(url, { ...article, publishedAt: article.publishedAt + 86400000 }), null);
-  assert.equal(confirmedPublisherLink(url, { ...article, site: 'https://other.example' }), null);
-  assert.equal(confirmedPublisherLink(url, { ...article, title: aldiaTitle + ' (actualització)' }), null);
-  const fetch = globalThis.fetch;
-  t.mock.method(globalThis, 'fetch', (input, options) => {
-    if (input !== publisher) return fetch(input, options);
-    return Promise.resolve(new Response('<article><p>Local test copy of the fire report from Torredembarra.</p></article>',
-        { headers: { 'content-type': 'text/html' } }));
-  });
-  const result = await api('/api/article', { url, ...article });
-  assert.equal(result.status, 200);
-  assert.equal(result.body.url, publisher);
-  assert.match(result.body.blocks[0].text, /Torredembarra/);
-});
-
 test('a short sitemap slug is verified against the page headline before the article is shown', async () => {
   const site = 'http://localhost:' + new URL(siteUrl).port;
   const found = await api('/api/article', { url: siteUrl + '/rss/articles/CBMiNoSignature_00000028', site, title: telecincoTitle });
@@ -478,15 +464,6 @@ test('a short sitemap slug is verified against the page headline before the arti
   const other = await api('/api/article', { url: siteUrl + '/rss/articles/CBMiNoSignature_00000029', site,
     title: telecincoTitle.replace('dos leves', 'tres leves') });
   assert.equal(other.status, 502, 'shared locations and topic words do not establish a headline match');
-});
-
-test('the reported Telecinco headline resolves independently of the Al Dia report about the same fire', () => {
-  const { confirmedPublisherLink } = require('../public/publisher');
-  const link = 'https://news.google.com/rss/articles/CBMiOpaqueLinkForFixture2027';
-  const item = { site: 'https://telecinco.es', title: telecincoTitle, publishedAt: Date.parse('2026-11-26T17:51:00Z') };
-  assert.equal(confirmedPublisherLink(link, item), 'https://www.telecinco.es' + telecincoPath);
-  assert.equal(confirmedPublisherLink(link, { ...item, site: 'https://www.aldia.cat' }), null);
-  assert.equal(confirmedPublisherLink(link, { ...item, title: aldiaTitle }), null);
 });
 
 test('a page for a reading view: fetched once with its article, scripts and styles left out', async () => {
@@ -533,4 +510,32 @@ test('whether a site lets its pages be shown in a frame', async () => {
   const gone = await api('/api/page', { url: siteUrl + '/no-such-page' });
   assert.equal(gone.status, 502);
   assert.equal(gone.body.error, 'HTTP 404');
+});
+
+test('a site behind a bot check: said so, and its other pages aren\'t tried one by one', async () => {
+  const article = await api('/api/article', { url: guardedUrl + '/news/a-story' });
+  assert.equal(article.status, 502);
+  assert.equal(article.body.error, 'HTTP 403 (browser check)');
+  guardedHits.length = 0;
+  const found = await api('/api/article', { url: `${siteUrl}/rss/articles/CBMiNoSignature_00000040`,
+    site: guardedUrl, title: 'Docents cansats, però encara al carrer' });
+  assert.equal(found.status, 502);
+  assert.match(found.body.error, /127\.0\.0\.1 only lets browsers in/);
+  assert.deepEqual(guardedHits, ['/'], 'only its home page was asked');
+});
+
+test('the text of a page read elsewhere (the NewsFeed app on a phone)', async () => {
+  const post = body => fetch(appUrl + '/api/extract', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+  const html = fs.readFileSync(path.join(FIXTURES, 'article.html'), 'utf8');
+  const res = await post(JSON.stringify({ url: 'https://news.example.com/climate-deal', html }));
+  assert.equal(res.status, 200);
+  const article = await res.json();
+  assert.equal(article.url, 'https://news.example.com/climate-deal');
+  assert.equal(article.title, 'Climate talks reach a deal in Bonn');
+  assert.equal(article.blocks.length, 5);
+  assert.ok(article.completeness);
+  assert.equal((await post('not json')).status, 400);
+  assert.equal((await post(JSON.stringify({ url: 'javascript:alert(1)', html }))).status, 400);
+  assert.equal((await post(JSON.stringify({ url: 'https://x.example/', html: 'x'.repeat(5 * 1024 * 1024) }))).status, 413);
+  assert.equal((await fetch(appUrl + '/api/extract', { method: 'PUT', body: '{}' })).status, 405);
 });

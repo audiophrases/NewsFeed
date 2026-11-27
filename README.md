@@ -50,7 +50,7 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   site's own icon when the country isn't known; topic articles show their outlet's icon. NewsFeed's
   server finds and caches the icons, so no icon service learns which sites you follow.
 - **Topics** – follow anything ("climate", `"champions league"`, `AI -crypto`) and get headlines
-  about it from every outlet, via Google News (Bing News as a fallback), in the edition you pick,
+  about it from every outlet, via Google News, in the edition you pick,
   and **also in as many other languages as you like**. Names work as they are in every language; for other
   words add the translations with OR: `housing OR vivienda OR habitatge`. A topic's view also
   includes matching articles from your own sources. Its articles open in the reader like any
@@ -61,12 +61,14 @@ Language **Node**, Build Command `npm install`, Start Command `node server.js`, 
   refuses a lookup (or redirects it, as it may for servers in data centres) the server leaves it
   alone for 30 minutes. When Google won't say, the article is looked for on its own site by its
   headline: in the site's feeds, among the links on its home page (some sites' feeds are years
-  out of date), in its WordPress search feed and public search index, and in its sitemaps. If those
-  miss, NewsFeed searches Bing News for the headline on the publisher's domain and checks the
-  result against the headline and outlet. NewsFeed also reads HTML search results using a GET
-  search form advertised on the publisher’s home page. When the server runs out of matches, the browser can check a publisher’s public
+  out of date), in its WordPress search feed and public search index, in the results of a GET
+  search form advertised on its home page, and in its sitemaps. A site behind a bot check
+  (Cloudflare's "Just a moment…") turns all of that away, so NewsFeed stops at its home page and
+  says so. When the server runs out of matches, the browser can check a publisher’s public
   WordPress index directly. If the headlines differ, **Use a publisher link** lets you paste
   the article’s address. NewsFeed opens it in the reader and remembers it on that device.
+  **In the [NewsFeed app](#the-android-app)** none of this is needed: the phone opens the Google
+  News link itself, as Chrome would, and reads the article from there.
 - **Edit** – the ✎ next to *Topics* or *Sources* lists everything you follow: type to rename
   (empty gives back the original name), reorder with the arrows or by dragging the handle, remove,
   or open more settings: a feed's flag, language and address; a Google News source's site, edition
@@ -152,6 +154,35 @@ own. To set it up:
    `http://localhost` and `http://localhost:8091` for this PC). Google offers sign-in only on
    those. A phone on your Wi-Fi (`http://192.168.…`) can't be added, so sign in there through Render.
 
+## The Android app
+
+Google News' article links, and outlets behind bot checks (Cloudflare's "Just a moment…"), turn
+NewsFeed's server away, as they do most servers in data centres, but let a phone in. A web page
+can't read another site's page for you, though: browsers keep sites apart. The app in
+[`android/`](android/) can. It shows NewsFeed as it is, and when you open an article that the
+server can't get (any topic article from Google News, or an outlet that turns the server away),
+the phone opens it in a browser view of its own, the way Chrome would, and hands the page to
+NewsFeed, which shows it in the reader. Usually you see nothing of this but the article. When
+something is in the way (Google's cookie choice, the first time; a site's check that wants a
+tap), the page is shown: tap through it, then **Reading mode**. Your choices are kept, as in a
+browser. In the app, 🌐 and **Open the page here** open the article's own page the same way,
+for anything the reader leaves out (videos, a subscription you're signed in to).
+
+- **Build it** on the PC that builds Play the News, the same way (no Gradle):
+  `powershell -ExecutionPolicy Bypass -File android\build.ps1`, then install
+  `android\build\newsfeed.apk` (`adb install -r …`, or copy it to the phone and open it). The
+  first build makes a signing key, `android\newsfeed.keystore`: keep a copy, as updates must be
+  signed with it (it isn't committed).
+- **Where your NewsFeed runs** is `app_url` in `android/res/values/strings.xml`.
+- **Your data**: the app keeps its own copy of your sources, read marks and saved articles, apart
+  from Chrome's. Bring them over with **Export** in Chrome and **Import** in the app (or sync).
+  Google may not offer its sign-in inside an app, so sync sign-in may only work in Chrome.
+- **Troubleshooting**: with USB debugging on, `chrome://inspect` on a computer shows the app's
+  pages and their console.
+
+The page and the app talk through a message channel the app gives NewsFeed's own page only, not
+frames in it nor any other site. Android 6 or later.
+
 ## API (used by the page)
 
 | Endpoint | |
@@ -159,12 +190,13 @@ own. To set it up:
 | `GET /api/directory` | built-in sources (`sources.json`) |
 | `GET /api/config` | the sync service's address (`SYNC_URL`), or null |
 | `GET /api/feed?url=` | a feed's articles |
-| `GET /api/search?q=&editions=ca-ES,en-US` | news about a topic, in one or more editions (up to 5; or `lang=&country=`) |
+| `GET /api/search?q=&editions=ca-ES,en-US` | news about a topic, in one or more editions (or `lang=&country=`) |
 | `GET /api/sources?q=&lang=&country=` | outlets and working feeds for a name |
 | `GET /api/discover?url=` | feeds a site offers |
 | `GET /api/icon?url=` | the icon of that address's site (cached a day; 404 if it has none) |
 | `GET /api/article?url=` | an article's readable text and how complete it is (a Google News link is looked up first) |
 | `GET /api/page?url=` | an article's page without scripts or styles, for the browser's reading view, and whether it may be framed |
+| `POST /api/extract` | the readable text of a page read elsewhere (JSON `{ url, html }`, from the app), as `/api/article` gives it; nothing is fetched |
 
 The server won't fetch addresses on your local network (so a page can't use it to reach your
 router etc.). Set `ALLOW_PRIVATE=1` if you want to read feeds hosted on your own network.

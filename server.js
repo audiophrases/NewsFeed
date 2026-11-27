@@ -19,7 +19,7 @@ const { candidateSites, feedBelongs, feedKey } = require('./lib/sources');
 const { iconCandidates, imageType, ICON_MAX_BYTES } = require('./lib/icons');
 const googleLinks = require('./lib/googlenews');
 const onSite = require('./lib/findarticle');
-const { confirmedPublisherLink, foldHeadline, publisherSearchTerm } = require('./public/publisher');
+const { foldHeadline, publisherSearchTerm } = require('./public/publisher');
 const zlib = require('zlib');
 
 const PORT = Number(process.env.PORT) || 8091;
@@ -37,7 +37,6 @@ const MAX_EDITIONS = 25;
 const SEARCH_SLOTS = 3;
 // Where news and feed searches go; the tests point these at a local site.
 const googleNews = () => process.env.GOOGLE_NEWS_URL || 'https://news.google.com/rss/search';
-const bingNews = () => process.env.BING_NEWS_URL || 'https://www.bing.com/news/search';
 const feedSearch = () => process.env.FEED_SEARCH_URL || 'https://cloud.feedly.com/v3/search/feeds';
 const googleNewsSite = () => process.env.GOOGLE_NEWS_SITE || 'https://news.google.com';
 /** The sync service (sync/worker.mjs) the page signs in to, if this server has one: SYNC_URL. */
@@ -103,7 +102,10 @@ const inSearchSlot = slots(SEARCH_SLOTS);
 /** Icon lookups too: a list of new sources shouldn't set off dozens of home page fetches at once. */
 const inIconSlot = slots(4);
 
-/** News about a topic from Google News (no key needed), tried twice; Bing News if Google fails. */
+/**
+ * News about a topic from Google News (no key needed), tried twice. (Bing News used to be the
+ * fallback, but it now answers servers with web pages or unrelated results instead of feeds.)
+ */
 async function searchNews(q, lang, country) {
   const hl = `${lang}-${country}`;
   const google = googleNews() + '?q=' + encodeURIComponent(q) + `&hl=${hl}&gl=${country}&ceid=${country}:${lang}`;
@@ -112,13 +114,7 @@ async function searchNews(q, lang, country) {
   } catch (e) {
     // Google now and then refuses one search among many; a second try a moment later works.
     await pause(1000);
-    try {
-      return await inSearchSlot(() => readFeed(google));
-    } catch (e2) {
-      const bing = bingNews() + '?format=rss&q=' + encodeURIComponent(q)
-          + `&setlang=${lang}&cc=${country}`;
-      return inSearchSlot(() => readFeed(bing));
-    }
+    return inSearchSlot(() => readFeed(google));
   }
 }
 
@@ -370,7 +366,11 @@ async function findOnSite(site, title) {
     alternatives.sort((a, b) => b.score - a.score);
     if (alternatives.length > 2) alternatives.pop();
   }
-  const home = await homeOf(origin).catch(() => ({ feeds: [], links: [] }));
+  // Behind a bot check, every other page of the site would be turned away the same way.
+  const home = await homeOf(origin).catch(e => {
+    if (e.challenge) throw e;
+    return { feeds: [], links: [] };
+  });
   for (const url of [...new Set(home.feeds)]) {
     const feed = await cached('feed|' + url, FEED_CACHE_MS, () => readFeed(url)).catch(() => null);
     const hit = feed && feed.items.find(i => i.link && onSite.sameHeadline(i.title, title));
@@ -416,16 +416,7 @@ async function findOnSite(site, title) {
     const heading = htmlToText((/<h1\b[^>]*>([\s\S]*?)<\/h1>/i.exec(page.text) || [])[1] || '');
     if ([heading, articleTitle(page.text)].some(t => t && foldHeadline(t) === foldHeadline(title))) return page.url;
   }
-  // Some publishers have neither WordPress nor a usable sitemap. Bing News also indexes
-  // publisher links, sometimes wrapped in its own click-through URL.
-  const query = new URLSearchParams({ format: 'rss', q: `site:${new URL(origin).hostname} ${title}` });
-  const news = await inSearchSlot(() => readFeed(`${bingNews()}?${query}`)).catch(() => null);
-  const candidates = (news?.items || []).map(item => {
-    let url = item.link;
-    if (url && /^(?:https?:\/\/)(?:[\w-]+\.)*bing\.com\//i.test(url)) url = new URL(url).searchParams.get('url');
-    return { title: item.title, url };
-  });
-  return onSite.publisherResult(candidates, title, origin);
+  return null;
 }
 
 /**
@@ -437,9 +428,15 @@ async function locate(link, title, site) {
     return await articleAddress(link, site);
   } catch (e) {
     if (!title || !site) throw e;
-    const found = await findOnSite(site, title).catch(() => null);
+    const host = new URL(site).hostname.replace(/^www\./, '');
+    let checked = false;
+    const found = await findOnSite(site, title).catch(error => {
+      checked = !!error.challenge;
+      return null;
+    });
     if (found) return found;
-    throw new FetchError(`${e.message}. NewsFeed couldn’t find a matching article on ${new URL(site).hostname.replace(/^www\./, '')}`);
+    throw new FetchError(checked ? `${e.message}. ${host} only lets browsers in, so NewsFeed’s server can’t look for the article there`
+      : `${e.message}. NewsFeed couldn’t find a matching article on ${host}`);
   }
 }
 
@@ -518,7 +515,8 @@ async function readArticle(url) {
   try {
     page = await fetchPage(url);
   } catch (error) {
-    // A publisher may serve its public post as JSON even when its website refuses the request.
+    // A publisher may serve its public post as JSON even when its website refuses the request
+    // (not behind a bot check, which turns away its JSON too).
     if (error.message === 'HTTP 403') {
       const post = await readPublicPost(url).catch(() => null);
       if (post) return { ...post, frameable: error.frameable };
@@ -589,8 +587,47 @@ async function api(res, what, work) {
   }
 }
 
+/** Most of a page the NewsFeed app may send for its text (as JSON, so a little over the page). */
+const EXTRACT_MAX_BYTES = 4 * 1024 * 1024;
+
+/** A request's body as text, at most max bytes (null if longer: the rest is read and dropped, so the answer arrives). */
+function readBody(req, max) {
+  return new Promise((resolve, reject) => {
+    let chunks = [];
+    let size = 0;
+    req.on('data', chunk => {
+      size += chunk.length;
+      if (size > max) chunks = null;
+      else if (chunks) chunks.push(chunk);
+    });
+    req.on('end', () => resolve(chunks ? Buffer.concat(chunks).toString('utf8') : null));
+    req.on('error', reject);
+  });
+}
+
+/**
+ * The article text of a page read somewhere else: the NewsFeed app opens pages on the phone,
+ * where sites that turn servers away let it in, and sends the page here for the same extraction
+ * as /api/article. Nothing is fetched.
+ */
+async function extractPosted(req, res) {
+  const body = await readBody(req, EXTRACT_MAX_BYTES);
+  if (body === null) return json(res, 413, { error: 'The page is too large' });
+  let page;
+  try {
+    page = JSON.parse(body);
+  } catch (e) {
+    return json(res, 400, { error: 'Not JSON' });
+  }
+  if (!page || typeof page.html !== 'string' || !/^https?:\/\/[^\s]+$/i.test(page.url || '')) {
+    return json(res, 400, { error: 'A page needs its address and HTML' });
+  }
+  return json(res, 200, extractArticle(page.html, page.url));
+}
+
 async function handle(req, res) {
   const u = new URL(req.url, 'http://localhost');
+  if (req.method === 'POST' && u.pathname === '/api/extract') return extractPosted(req, res);
   if (req.method !== 'GET') return send(res, 405, 'Method not allowed', 'text/plain');
 
   if (u.pathname === '/health') return send(res, 200, 'ok', 'text/plain');
@@ -641,12 +678,11 @@ async function handle(req, res) {
     // For a topic's article, its headline and outlet's site, in case Google News won't say where it is.
     const title = (u.searchParams.get('title') || '').trim().slice(0, 300);
     const site = /^https?:\/\/[^\s]+$/i.test(u.searchParams.get('site') || '') ? u.searchParams.get('site') : null;
-    const publishedAt = u.searchParams.get('publishedAt');
     const article = u.pathname === '/api/article';
     return api(res, `${article ? 'article' : 'page'} ${url}`, async () => {
       // A topic's article: first where its Google News link leads (remembered), then the article.
       const address = isGoogleNewsLink(url)
-        ? confirmedPublisherLink(url, { title, site, publishedAt }) || await cached('link|' + url, LINK_CACHE_MS, () => locate(url, title, site))
+        ? await cached('link|' + url, LINK_CACHE_MS, () => locate(url, title, site))
         : url;
       return article ? cached('article|' + address, ARTICLE_CACHE_MS, () => readArticle(address)) : readerPage(address);
     });

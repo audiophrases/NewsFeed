@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NewsFeed</string>
+    <!-- Where your NewsFeed runs: the app shows this site and lets it open articles on the phone. -->
+    <string name="app_url" translatable="false">https://newsfeed-7m73.onrender.com/</string>
+    <string name="connecting">Opening NewsFeed…</string>
+    <string name="unreachable">Couldn’t reach NewsFeed. Tap to try again.</string>
+    <string name="back_to_newsfeed">Back to NewsFeed</string>
+    <string name="reading_mode">Reading mode</string>
+    <string name="saved">Saved</string>
+    <string name="not_saved">Couldn’t save the file</string>
+    <string name="no_app">No app on this phone can do that</string>
+</resources>

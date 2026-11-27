@@ -809,6 +809,7 @@ const narrow = () => matchMedia('(max-width: 860px)').matches;
 function select(key, { scroll = false } = {}) {
   const a = articleByKey(key);
   if (!a) return;
+  if (phoneRead && phoneRead.key !== key) stopOnPhone();
   selectedKey = key;
   if (!readKeys.has(key)) {
     readKeys.add(key);
@@ -910,7 +911,10 @@ function renderReader(a) {
   parts.push(note);
   body.replaceChildren(...parts);
   if (siteShown.has(a.key)) showSite(a);
+  // A reading view the phone made means the text the server had was too short: it comes first.
+  else if (phoneViews.has(a.key)) showReadingView(a, phoneViews.get(a.key));
   else if (fullTexts.has(a.key)) showFullText(a, fullTexts.get(a.key));
+  else if (phoneRead && phoneRead.key === a.key && !phoneRead.done) setStatus('loading', 'Opening the article…');
   else if (refusals.has(a.key)) {
     setStatus('summary', shownSoFar(a), refusals.get(a.key));
     readerActions(a, '', undefined, false);
@@ -943,6 +947,7 @@ function setStatus(kind, label, detail, subscriber = false) {
 
 /** A fetch error, said the way a reader would want to hear it. */
 function explainFailure(message, site) {
+  if (/browser check/.test(message)) return `${site} only lets browsers in, so NewsFeed’s server can’t read it.`;
   if (/HTTP 402/.test(message)) return `${site} only shows its articles to subscribers.`;
   if (/HTTP 40[13]/.test(message)) return `${site} doesn’t let NewsFeed read its pages.`;
   if (/HTTP 4(04|10)/.test(message)) return 'The article is no longer on the site.';
@@ -977,7 +982,7 @@ let knownLinks = new Map();
 const saveLinks = () => store(KEY_LINKS, [...knownLinks].slice(-LINKS_LIMIT));
 
 /** The article's own address when known (a topic's articles come as Google News links). */
-const articleLink = a => confirmedPublisherLink(a.link, a) || knownLinks.get(a.link) || a.link;
+const articleLink = a => knownLinks.get(a.link) || a.link;
 
 function rememberPublisher(a, address) {
   if (!isGoogleNews(a.link) || !canFetch(address) || isGoogleNews(address)) return;
@@ -1058,6 +1063,9 @@ function readerActions(a, message, openText, canRetry = true) {
   if (canRetry && a.link && canFetch(a.link) && !fullTexts.has(a.key)) {
     actions.append(button('primary subtle', 'Load full text', () => loadFullText(a)));
   }
+  if (phone && a.link && canFetch(a.link)) {
+    actions.append(button('primary subtle', 'Open the page here', () => readOnPhone(a, { show: true })));
+  }
   note.append(actions);
 }
 
@@ -1070,6 +1078,9 @@ async function loadFullText(a) {
   const note = $('reader-note');
   if (note) note.replaceChildren();
   const link = articleLink(a);
+  // In the NewsFeed app the phone opens a Google News link as Chrome would: Google forwards
+  // phones to the article, while it turns NewsFeed's server away.
+  if (isGoogleNews(link) && readOnPhone(a)) return;
   setStatus('loading', isGoogleNews(link) ? 'Finding the article through Google News…' : 'Loading the full article…');
   let result;
   try {
@@ -1080,6 +1091,8 @@ async function loadFullText(a) {
     rememberPublisher(a, e.articleUrl);
     if (e.frameable === false) frameRefused.add(a.key);
     if (selectedKey !== a.key || siteShown.has(a.key)) return;
+    // Turned away (a bot check, a block) or too slow for the server: a phone may be let in.
+    if (!/HTTP 4(04|10)|Not a web page/.test(e.message) && readOnPhone(a)) return;
     const home = isGoogleNews(articleLink(a)) && outletHome(a);
     if (home) {
       setStatus('loading', 'Checking the publisher’s index…');
@@ -1112,16 +1125,20 @@ async function loadFullText(a) {
 
 const plural = (n, one, many) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
 
+/** Whether an extracted article is worth showing: longer than the feed's summary (a checked whole one may be short). */
+function enoughText(a, result) {
+  const status = (result.completeness || {}).status;
+  const fullLength = result.blocks.reduce((n, b) => n + b.text.length, 0);
+  const minLength = result.from === 'publisher-post' || status === 'full' ? 1 : 300;
+  return fullLength >= Math.max(minLength, (a.summary || '').length * 1.2);
+}
+
 function showFullText(a, result) {
   const text = $('reader-text');
   // The outlet's name as listed ("Altafulla Ràdio"), not its page's own, which can be a slogan.
   const site = a.sourceName || result.site;
   const { status, expected, subscriber } = result.completeness || { status: 'unknown' };
-  // Only replace the feed's summary with something longer.
-  const summaryLength = (a.summary || '').length;
-  const fullLength = result.blocks.reduce((n, b) => n + b.text.length, 0);
-  const minLength = result.from === 'publisher-post' || status === 'full' ? 1 : 300;
-  if (!text || fullLength < Math.max(minLength, summaryLength * 1.2)) {
+  if (!text || !enoughText(a, result)) {
     const why = subscriber ? 'The page has no more of this subscriber article for NewsFeed.'
       : `${site} didn’t share more than this with NewsFeed.`;
     setStatus('summary', shownSoFar(a), why.replace(/^The/, 'the').replace(/\.$/, ''), subscriber);
@@ -1201,20 +1218,26 @@ function makeReadingView(a) {
     const made = Promise.all([getJson(`/api/page?url=${encodeURIComponent(link)}${lookupParams(a, link)}`), loadReadability()])
         .then(([page]) => {
           if (page.frameable === false) frameRefused.add(a.key);
-          // A parsed document is inert: nothing in it runs or loads.
-          const doc = new DOMParser().parseFromString(page.html, 'text/html');
-          const base = doc.createElement('base');
-          base.href = page.url;
-          doc.head.prepend(base);
-          const parsed = new window.Readability(doc, { charThreshold: 300 }).parse();
-          const text = parsed && (parsed.textContent || '').replace(/\s+/g, ' ').trim();
-          if (!text || text.length < Math.max(300, (a.summary || '').length * 1.2)) return null;
-          return { content: parsed.content, url: page.url, words: text.split(' ').length };
+          return readingViewOf(a, page.html, page.url);
         });
     made.catch(() => readingViews.delete(a.key));
     readingViews.set(a.key, made);
   }
   return readingViews.get(a.key);
+}
+
+/** A reading view of a page's HTML, or null when it has no article longer than the feed's summary. */
+async function readingViewOf(a, html, url) {
+  await loadReadability();
+  // A parsed document is inert: nothing in it runs or loads.
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const base = doc.createElement('base');
+  base.href = url;
+  doc.head.prepend(base);
+  const parsed = new window.Readability(doc, { charThreshold: 300 }).parse();
+  const text = parsed && (parsed.textContent || '').replace(/\s+/g, ' ').trim();
+  if (!text || text.length < Math.max(300, (a.summary || '').length * 1.2)) return null;
+  return { content: parsed.content, url, words: text.split(' ').length };
 }
 
 /** Tags a reading view keeps (others give up their text and keep nothing else), and renamed ones. */
@@ -1363,16 +1386,192 @@ async function fallbackFromPage(a, result, why) {
     }
     if (selectedKey !== a.key || siteShown.has(a.key)) return;
     if (view) return showReadingView(a, view);
+    // Pages filled in by scripts: the phone's browser runs them.
+    if (readOnPhone(a)) return;
   }
   if (selectedKey !== a.key) return;
   setStatus('summary', shownSoFar(a), why, result.completeness?.subscriber);
   readerActions(a);
 }
 
+// ---- the NewsFeed app on a phone ---------------------------------------------------------
+//
+// In the NewsFeed Android app (android/), this page gets a message channel to the app, which
+// can open an article in a browser view of its own on the phone: there Google News forwards it
+// to the outlet, and outlets that turn NewsFeed's server away (bot checks) let it in. The app
+// hands the page back; its text comes from the same extraction as a page the server read
+// (POST /api/extract), or from a reading view. When something is in the way (a cookie choice,
+// a check), the app shows the page: tap through it, then Reading mode.
+
+/** The app's end of the channel, when this page runs in the NewsFeed app. */
+let phone = null;
+let phoneSeq = 0;
+/**
+ * The article the phone is reading: { id, key, byYou, showing, closed, done, pages, timer }. byYou:
+ * you opened its page to look at it, so only Reading mode (not the app on its own) reads it.
+ */
+let phoneRead = null;
+/** Reading views of pages the phone read, by article key. */
+const phoneViews = new Map();
+
+const PHONE_HINTS = {
+  consent: 'Choose an option on Google’s cookie page once; NewsFeed remembers it.',
+  check: 'The site is checking you’re a person: tap through it, then Reading mode.',
+  slow: 'Tap through anything in the way, then Reading mode.',
+};
+
+window.addEventListener('message', event => {
+  // Only the app's message: it comes from no window (one from a frame in this page would).
+  if (event.source || typeof event.data !== 'string' || !event.data.startsWith('newsfeed-android:')
+      || !event.ports || !event.ports[0]) return;
+  // The app sends a new channel each time the page loads: the newest one is the live one.
+  if (phone) phone.close();
+  phone = event.ports[0];
+  phone.onmessage = message => fromPhone(message.data);
+  document.documentElement.classList.add('in-app');
+  if (selectedKey) renderReaderState();
+});
+
+function toPhone(message) {
+  if (phone) phone.postMessage(JSON.stringify(message));
+}
+
+/** Has the phone open an article (shown to you at once if asked); false outside the app. */
+function readOnPhone(a, { show = false } = {}) {
+  if (!phone || !a.link || !canFetch(a.link)) return false;
+  if (phoneRead && !phoneRead.done) stopOnPhone();
+  const read = { id: ++phoneSeq, key: a.key, byYou: show, showing: false, closed: false, done: false, pages: 0, timer: 0 };
+  phoneRead = read;
+  toPhone({ type: 'read', id: read.id, url: articleLink(a) });
+  if (show) showOnPhone(read, PHONE_HINTS.slow);
+  if (selectedKey === a.key) {
+    setStatus('loading', 'Opening the article…');
+    $('reader-note')?.replaceChildren();
+  }
+  return true;
+}
+
+function showOnPhone(read, hint) {
+  clearTimeout(read.timer);
+  read.showing = true;
+  read.closed = false;
+  toPhone({ type: 'show', id: read.id, hint });
+}
+
+function doneOnPhone(read) {
+  read.done = true;
+  clearTimeout(read.timer);
+  if (read.showing) toPhone({ type: 'hide', id: read.id });
+  read.showing = false;
+}
+
+function stopOnPhone() {
+  const read = phoneRead;
+  if (!read || read.done) return;
+  read.done = true;
+  clearTimeout(read.timer);
+  toPhone({ type: 'cancel', id: read.id });
+}
+
+function fromPhone(data) {
+  let message;
+  try {
+    message = JSON.parse(data);
+  } catch (e) {
+    return;
+  }
+  const read = phoneRead;
+  if (!read || message.id !== read.id) return;
+  const a = articleByKey(read.key);
+  if (!a) return;
+  const here = () => selectedKey === a.key && phoneRead === read;
+  const waitForYou = reason => {
+    if (read.done || read.showing || read.closed) return;
+    showOnPhone(read, PHONE_HINTS[reason] || PHONE_HINTS.slow);
+    if (here()) setStatus('loading', 'Waiting for you on the article’s page…');
+  };
+  if (message.type === 'address') {
+    rememberPublisher(a, message.url);
+    if (here()) $('open-original').href = articleLink(a);
+  } else if (message.type === 'page') {
+    pageFromPhone(a, read, message, here, waitForYou);
+  } else if (message.type === 'stuck') {
+    waitForYou(message.reason);
+  } else if (message.type === 'failed' && !read.done) {
+    read.done = true;
+    if (here()) {
+      setStatus('summary', shownSoFar(a), `The article’s page couldn’t be opened (${message.error}).`);
+      readerActions(a);
+    }
+  } else if (message.type === 'closed') {
+    read.showing = false;
+    read.closed = true;
+    if (read.done || !here()) return;
+    read.done = true;
+    // Back from looking at the page: the reader as it was, if it had the article already.
+    if (fullTexts.has(a.key) || phoneViews.has(a.key)) return renderReader(a);
+    setStatus('summary', shownSoFar(a), 'The article’s page was closed before it could be read.');
+    readerActions(a);
+  }
+}
+
+/** A page the phone read: its text, else a reading view, else (nothing there yet) it's shown to you. */
+async function pageFromPhone(a, read, page, here, waitForYou) {
+  if (read.done || (read.byYou && !page.user)) return;
+  const n = ++read.pages;
+  rememberPublisher(a, page.url);
+  if (page.error || !page.html) return;
+  // A newer page (a check passing, a redirect) or the reader moving on wins over this one.
+  const stale = () => read.done || phoneRead !== read || (n !== read.pages && !page.user);
+  const result = await extractOnServer(page).catch(() => null);
+  if (stale()) return;
+  if (result && enoughText(a, result)) {
+    doneOnPhone(read);
+    fullTexts.set(a.key, result);
+    if (here()) {
+      $('open-original').href = articleLink(a);
+      showFullText(a, result);
+    }
+    return;
+  }
+  const view = await readingViewOf(a, page.html, page.url).catch(() => null);
+  if (stale()) return;
+  if (view) {
+    doneOnPhone(read);
+    phoneViews.set(a.key, view);
+    if (here()) {
+      $('open-original').href = articleLink(a);
+      showReadingView(a, view);
+    }
+    return;
+  }
+  // No article on it yet: a cookie wall, a check, or a page still being filled in.
+  if (page.user) {
+    toPhone({ type: 'toast', text: 'No article on this page yet: tap through anything in the way, then Reading mode.' });
+  } else {
+    clearTimeout(read.timer);
+    read.timer = setTimeout(() => waitForYou('slow'), 2500);
+  }
+}
+
+/** The same extraction as /api/article, of a page the phone read (the server fetches nothing). */
+async function extractOnServer(page) {
+  const res = await fetch('/api/extract', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: page.url, html: page.html }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 /** The reader bar's site button: shows the site's page, or goes back to the reader. */
 function toggleSite() {
   const a = selectedKey && articleByKey(selectedKey);
   if (!a) return;
+  // In the app, the page opens on the phone instead, where nothing stops it showing or being read.
+  if (phone && !siteShown.has(a.key) && a.link && canFetch(a.link)) {
+    readOnPhone(a, { show: true });
+    return;
+  }
   if (siteShown.has(a.key)) {
     siteShown.delete(a.key);
     renderReader(a);
@@ -1390,7 +1589,7 @@ function renderSiteButton() {
   const on = !!selectedKey && siteShown.has(selectedKey);
   $('view-site').classList.toggle('on', on);
   $('view-site').setAttribute('aria-pressed', String(on));
-  $('view-site').title = on ? 'Back to the reader (w)' : 'Show the site’s page here (w)';
+  $('view-site').title = on ? 'Back to the reader (w)' : phone ? 'Open the article’s page (w)' : 'Show the site’s page here (w)';
 }
 
 function toggleRead() {
@@ -2363,9 +2562,11 @@ async function saveEdit() {
 
 function exportSources() {
   const data = JSON.stringify({ app: 'NewsFeed', version: 1, sources, saved: [...saved.values()] }, null, 2);
+  const name = `newsfeed-${new Date().toISOString().slice(0, 10)}.json`;
+  if (phone) return toPhone({ type: 'save', name, text: data, mime: 'application/json' });
   const a = el('a');
   a.href = URL.createObjectURL(new Blob([data], { type: 'application/json' }));
-  a.download = `newsfeed-${new Date().toISOString().slice(0, 10)}.json`;
+  a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
