@@ -1,6 +1,7 @@
 // NewsFeed: reads the sources and topics you follow, merged into one list you can search,
 // filter and sort, with a reader for each article. Everything you set up is kept in this
-// browser; the server (server.js) fetches the feeds, news searches and article pages.
+// browser; the server (server.js) fetches the feeds, news searches and article pages, or in the
+// NewsFeed app the phone does (local.js).
 // Storage, DOM helpers, the toast and the add dialog follow Play the News' web app.
 'use strict';
 
@@ -154,8 +155,14 @@ function topicEntry(s) {
   return { kind: 'topic', q: s.q, lang, country, editions, name: s.name || s.q };
 }
 
+/** An API request (/api/…): to the server, or in the NewsFeed app to the API running on the phone (local.js). */
+async function apiFetch(url, init) {
+  const local = await localApi;
+  return local ? local.fetch(url, init) : fetch(url, init);
+}
+
 async function getJson(url) {
-  const res = await fetch(url);
+  const res = await apiFetch(url);
   let body;
   try {
     body = await res.json();
@@ -1396,12 +1403,13 @@ async function fallbackFromPage(a, result, why) {
 
 // ---- the NewsFeed app on a phone ---------------------------------------------------------
 //
-// In the NewsFeed Android app (android/), this page gets a message channel to the app, which
-// can open an article in a browser view of its own on the phone: there Google News forwards it
-// to the outlet, and outlets that turn NewsFeed's server away (bot checks) let it in. The app
-// hands the page back; its text comes from the same extraction as a page the server read
-// (POST /api/extract), or from a reading view. When something is in the way (a cookie choice,
-// a check), the app shows the page: tap through it, then Reading mode.
+// In the NewsFeed Android app (android/), this page runs on the phone with no server (local.js
+// runs the API there), and gets a message channel to the app, which can open an article in a
+// browser view of its own: there Google News forwards it to the outlet, and pages that need a
+// browser (bot checks, pages filled in by scripts) work. The app hands the page back; its text
+// comes from the same extraction as any other page's (/api/extract), or from a reading view.
+// When something is in the way (a cookie choice, a check), the app shows the page: tap through
+// it, then Reading mode.
 
 /** The app's end of the channel, when this page runs in the NewsFeed app. */
 let phone = null;
@@ -1523,7 +1531,7 @@ async function pageFromPhone(a, read, page, here, waitForYou) {
   if (page.error || !page.html) return;
   // A newer page (a check passing, a redirect) or the reader moving on wins over this one.
   const stale = () => read.done || phoneRead !== read || (n !== read.pages && !page.user);
-  const result = await extractOnServer(page).catch(() => null);
+  const result = await extractText(page).catch(() => null);
   if (stale()) return;
   if (result && enoughText(a, result)) {
     doneOnPhone(read);
@@ -1554,9 +1562,9 @@ async function pageFromPhone(a, read, page, here, waitForYou) {
   }
 }
 
-/** The same extraction as /api/article, of a page the phone read (the server fetches nothing). */
-async function extractOnServer(page) {
-  const res = await fetch('/api/extract', {
+/** The same extraction as /api/article, of a page the phone read (on the phone too: nothing is fetched). */
+async function extractText(page) {
+  const res = await apiFetch('/api/extract', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: page.url, html: page.html }),
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -2903,8 +2911,8 @@ function mark(country, link) {
 }
 
 /**
- * The icon a site shows in browser tabs, found and kept by the server (so no icon service learns
- * which sites you follow); a blank if it has none.
+ * The icon a site shows in browser tabs, found and kept by the server, or in the NewsFeed app by
+ * the phone (so no icon service learns which sites you follow); a blank if it has none.
  */
 function siteIcon(link) {
   let origin;
@@ -2914,10 +2922,17 @@ function siteIcon(link) {
     return flag(null);
   }
   const img = el('img', 'flag icon');
-  img.src = `/api/icon?url=${encodeURIComponent(origin)}`;
   img.alt = '';
   img.loading = 'lazy';
   img.addEventListener('error', () => img.replaceWith(flag(null)));
+  if (!localApi) {
+    img.src = `/api/icon?url=${encodeURIComponent(origin)}`;
+    return img;
+  }
+  localApi.then(local => local.iconUrl(origin)).then(src => {
+    if (src) img.src = src;
+    else img.replaceWith(flag(null));
+  }, () => img.replaceWith(flag(null)));
   return img;
 }
 
@@ -3049,6 +3064,12 @@ function upgradeView(view, replaced) {
 }
 
 async function start() {
+  // In the NewsFeed app: the API on the phone, and what the app kept before it ran without a server.
+  try {
+    await localApi;
+  } catch (e) {
+    toast(`NewsFeed couldn’t start: ${e.message}`);
+  }
   const config = getJson('/api/config').catch(() => ({}));
   try {
     directory = await getJson('/api/directory');

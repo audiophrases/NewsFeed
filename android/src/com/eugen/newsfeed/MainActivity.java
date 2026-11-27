@@ -3,6 +3,7 @@ package com.eugen.newsfeed;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.Color;
@@ -23,11 +24,13 @@ import android.view.WindowInsetsController;
 import android.webkit.CookieManager;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.ValueCallback;
+import android.webkit.WebBackForwardList;
 import android.webkit.WebChromeClient;
 import android.webkit.WebMessage;
 import android.webkit.WebMessagePort;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -38,20 +41,46 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.window.OnBackInvokedDispatcher;
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.FilterInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.SequenceInputStream;
+import java.net.HttpURLConnection;
+import java.net.Inet4Address;
+import java.net.Inet6Address;
+import java.net.InetAddress;
+import java.net.SocketTimeoutException;
+import java.net.URL;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import javax.net.ssl.SSLException;
 import org.json.JSONException;
 import org.json.JSONObject;
 
 /**
- * NewsFeed on the phone: the NewsFeed web app, plus what a web page can't do itself. Many sites
- * turn NewsFeed's server away (Google News' article links, outlets behind Cloudflare's bot check)
- * but let a phone in, and a web page can't read another site's page. So when NewsFeed asks, the
- * app opens an article in a browser view of its own, the way Chrome would (Google News forwards
- * it to the outlet), and hands the page back to NewsFeed, which shows it in its reader. When
- * something is in the way (a cookie choice, a check), the page is shown: tap through it, then
- * Reading mode.
+ * NewsFeed on the phone, with no server. The app carries NewsFeed's page (the web app's own files,
+ * put in by build.ps1) and serves it from inside itself at APP_ORIGIN. On the web a server has to
+ * fetch feeds and articles for the page, because a web page can't read other sites; here the app
+ * does it for the page (/app/net), as the phone, so the server's API (lib/api.js) runs in the page
+ * itself (public/local.js). Sites that turn servers away (Google News' article links, outlets
+ * behind Cloudflare's bot check) usually let a phone in.
+ *
+ * Some pages need a browser all the same (a check that runs scripts, a page filled in by them):
+ * when NewsFeed asks, the app opens an article in a browser view of its own, the way Chrome would
+ * (Google News forwards it to the outlet), and hands the page back to NewsFeed, which shows it in
+ * its reader. When something is in the way (a cookie choice, a check), the page is shown: tap
+ * through it, then Reading mode.
  *
  * NewsFeed's page and the app talk through a message channel the app gives that page only (not to
  * frames in it, nor to any other site). Messages are JSON:
@@ -62,8 +91,29 @@ import org.json.JSONObject;
  */
 public class MainActivity extends Activity {
 
+    /**
+     * Where the app serves NewsFeed's page from: Android's address for an app's own files (a real
+     * https address, so the page keeps what you follow and read as on any site; nothing is fetched).
+     */
+    private static final String APP_ORIGIN = "https://appassets.androidplatform.net";
     /** What the app sends NewsFeed's page with the channel's port: the bridge's name and version. */
     private static final String HELLO = "newsfeed-android:1";
+    /** Fetching for the page, as NewsFeed's server does: how long to wait, how far to be sent on. */
+    private static final int TIMEOUT_MS = 15000;
+    private static final int MAX_REDIRECTS = 5;
+    /** The response headers the page's API looks at. */
+    private static final String[] PASSED_HEADERS = {
+        "content-type", "location", "x-frame-options", "content-security-policy", "cf-mitigated",
+    };
+    /** What the page kept, read where it was kept before (the app showed NewsFeed from its server). */
+    private static final String COLLECT_JS = "(function () {\n"
+            + "  var kept = {};\n"
+            + "  for (var i = 0; i < localStorage.length; i++) {\n"
+            + "    var key = localStorage.key(i);\n"
+            + "    if (key.indexOf('newsfeed.') === 0) kept[key] = localStorage.getItem(key);\n"
+            + "  }\n"
+            + "  return kept;\n"
+            + "})()";
     private static final int PICK_FILE = 1, SAVE_FILE = 2;
     /** How long a page is given to settle (scripts filling it in) before it's read. */
     private static final long SETTLE_MS = 1500;
@@ -110,6 +160,12 @@ public class MainActivity extends Activity {
     private String appOrigin;
     private WebMessagePort port;
     private boolean mainFailed;
+    /** Opened afresh (not restored): what came before it in the view's history goes. */
+    private boolean clearHistory;
+    /** Asked for with every fetch: only NewsFeed's own page knows it (it's new each time the app starts). */
+    private String token;
+    /** Fetches go as the phone's browser view (whose cookies they share). */
+    private String userAgent;
 
     /** The article being read: its id from NewsFeed, and how far it got. */
     private int readId;
@@ -128,8 +184,14 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
-        appUri = Uri.parse(getString(R.string.app_url));
-        appOrigin = originOf(appUri);
+        appUri = Uri.parse(APP_ORIGIN + "/");
+        appOrigin = APP_ORIGIN;
+        byte[] secret = new byte[24];
+        new SecureRandom().nextBytes(secret);
+        StringBuilder hex = new StringBuilder();
+        for (byte b : secret) hex.append(String.format(Locale.ROOT, "%02x", b));
+        token = hex.toString();
+        userAgent = WebSettings.getDefaultUserAgent(this);
         // Personal app: lets a computer inspect its pages (chrome://inspect) over USB debugging.
         WebView.setWebContentsDebuggingEnabled(true);
 
@@ -177,7 +239,81 @@ public class MainActivity extends Activity {
         listenForBack();
 
         CookieManager.getInstance().setAcceptCookie(true);
-        if (state == null || main.restoreState(state) == null) main.loadUrl(appUri.toString());
+        // Back where it was (the page as you left it), unless that was NewsFeed from its server.
+        WebBackForwardList restored = state == null ? null : main.restoreState(state);
+        if (restored == null || restored.getCurrentItem() == null
+                || !appOrigin.equals(originOf(Uri.parse(restored.getCurrentItem().getUrl())))) {
+            moveOldDataThenOpen();
+        }
+    }
+
+    private void open() {
+        clearHistory = true;
+        main.loadUrl(appUri.toString());
+    }
+
+    /**
+     * Before the app carried NewsFeed's page, it showed it from NewsFeed's server (moved_from),
+     * and what you follow, read and saved was kept under that address. Once, it's read from there
+     * (the old address is answered by the app, so nothing is fetched) for NewsFeed's page to take
+     * over (/app/config.json), and then NewsFeed opens.
+     */
+    private void moveOldDataThenOpen() {
+        SharedPreferences prefs = getSharedPreferences("newsfeed", MODE_PRIVATE);
+        Uri from = Uri.parse(getString(R.string.moved_from));
+        String oldOrigin = originOf(from);
+        if (prefs.getBoolean("looked-for-old-data", false) || oldOrigin.isEmpty()) {
+            open();
+            return;
+        }
+        WebView mover = new WebView(this);
+        mover.getSettings().setJavaScriptEnabled(true);
+        mover.getSettings().setDomStorageEnabled(true);
+        boolean[] done = { false };
+        Runnable finish = () -> {
+            if (done[0]) return;
+            done[0] = true;
+            root.removeView(mover);
+            mover.destroy();
+            open();
+        };
+        mover.setWebViewClient(new WebViewClient() {
+            @Override
+            public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                if (request.isForMainFrame() && oldOrigin.equals(originOf(request.getUrl()))) {
+                    return text(200, "text/html", "<!doctype html><title>NewsFeed</title>");
+                }
+                return text(404, "text/plain", "");
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                if (done[0] || !oldOrigin.equals(originOf(Uri.parse(url)))) return;
+                view.evaluateJavascript(COLLECT_JS, value -> {
+                    if (done[0]) return;
+                    try {
+                        JSONObject kept = new JSONObject(value);
+                        if (kept.length() > 0) {
+                            try (OutputStream out = new FileOutputStream(movedFile())) {
+                                out.write(kept.toString().getBytes(StandardCharsets.UTF_8));
+                            }
+                        }
+                        prefs.edit().putBoolean("looked-for-old-data", true).apply();
+                    } catch (JSONException | IOException e) {
+                        // Looked for again next time.
+                    }
+                    finish.run();
+                });
+            }
+        });
+        root.addView(mover, 0, new FrameLayout.LayoutParams(1, 1));
+        mover.loadUrl(oldOrigin + "/");
+        ui.postDelayed(finish, 5000);
+    }
+
+    /** What the app kept to hand to NewsFeed's page, until the page has it. */
+    private File movedFile() {
+        return new File(getFilesDir(), "moved.json");
     }
 
     private WebView createArticleView() {
@@ -326,6 +462,12 @@ public class MainActivity extends Activity {
     // ---- NewsFeed's page --------------------------------------------------------------------
 
     private class MainClient extends WebViewClient {
+        /** NewsFeed's own address is answered by the app (on a background thread): see appResponse. */
+        @Override
+        public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+            return appOrigin.equals(originOf(request.getUrl())) ? appResponse(request) : null;
+        }
+
         @Override
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
             // Frames in NewsFeed (a site's own page, shown at your request) go their own way.
@@ -348,7 +490,12 @@ public class MainActivity extends Activity {
         public void onPageFinished(WebView view, String url) {
             if (mainFailed) return;
             banner.setVisibility(View.GONE);
-            if (appOrigin.equals(originOf(Uri.parse(url)))) connect();
+            if (!appOrigin.equals(originOf(Uri.parse(url)))) return;
+            if (clearHistory) {
+                clearHistory = false;
+                main.clearHistory();
+            }
+            connect();
         }
 
         @Override
@@ -364,6 +511,273 @@ public class MainActivity extends Activity {
             recreate();
             return true;
         }
+    }
+
+    // ---- NewsFeed's own address: its files, and fetching for it --------------------------------
+
+    /**
+     * A request to NewsFeed's own address: a file of its page (assets/www, put in by build.ps1),
+     * or one of the app's answers under /app/: the page's settings, a fetch, word that the page
+     * has what the app kept for it.
+     */
+    private WebResourceResponse appResponse(WebResourceRequest request) {
+        Uri url = request.getUrl();
+        String path = TextUtils.isEmpty(url.getPath()) ? "/" : url.getPath();
+        switch (path) {
+            case "/app/config.json":
+                return config();
+            case "/app/net":
+                return fromPage(request) ? fetchFor(url) : text(403, "text/plain", "Not NewsFeed's request");
+            case "/app/moved":
+                if (!fromPage(request)) return text(403, "text/plain", "Not NewsFeed's request");
+                //noinspection ResultOfMethodCallIgnored
+                movedFile().delete();
+                return text(200, "text/plain", "ok");
+            default:
+                break;
+        }
+        if (path.equals("/")) path = "/index.html";
+        if (path.contains("..") || path.startsWith("/app/")) return text(404, "text/plain", "Not found");
+        try {
+            InputStream in = getAssets().open("www" + path);
+            String type = typeOf(path);
+            boolean textual = type.startsWith("text/") || type.endsWith("json") || type.endsWith("xml");
+            return new WebResourceResponse(type, textual ? "utf-8" : null, 200, "OK", noStore(), in);
+        } catch (IOException e) {
+            return text(404, "text/plain", "Not found");
+        }
+    }
+
+    /** The page's settings: the word its fetches carry, the sync service, and what the app kept for it. */
+    private WebResourceResponse config() {
+        JSONObject config = new JSONObject();
+        try {
+            config.put("token", token);
+            config.put("syncUrl", getString(R.string.sync_url));
+            File moved = movedFile();
+            if (moved.exists()) {
+                byte[] bytes = new byte[(int) moved.length()];
+                try (InputStream in = new FileInputStream(moved)) {
+                    int at = 0;
+                    for (int n; at < bytes.length && (n = in.read(bytes, at, bytes.length - at)) > 0; ) at += n;
+                }
+                config.put("moved", new JSONObject(new String(bytes, StandardCharsets.UTF_8)));
+            }
+        } catch (JSONException | IOException e) {
+            // Without what was kept, then.
+        }
+        return text(200, "application/json", config.toString());
+    }
+
+    /** Whether a request comes from NewsFeed's own page (it carries the app's word), not a frame in it. */
+    private boolean fromPage(WebResourceRequest request) {
+        for (Map.Entry<String, String> header : request.getRequestHeaders().entrySet()) {
+            if ("X-NewsFeed".equalsIgnoreCase(header.getKey())) return token.equals(header.getValue());
+        }
+        return false;
+    }
+
+    /**
+     * Fetches what the page asks for (url, method, body, headers as JSON, max bytes, follow
+     * redirects or not), as NewsFeed's server would. The answer is a line of JSON (status, address
+     * after redirects, the headers that matter, or the error) and then the response's bytes. The
+     * fetch starts when the page reads the answer, on WebView's background thread, not here.
+     */
+    private WebResourceResponse fetchFor(Uri ask) {
+        InputStream answer = new InputStream() {
+            private InputStream in;
+
+            private InputStream in() {
+                if (in == null) in = download(ask);
+                return in;
+            }
+
+            @Override
+            public int read() throws IOException {
+                return in().read();
+            }
+
+            @Override
+            public int read(byte[] b, int off, int len) throws IOException {
+                return in().read(b, off, len);
+            }
+
+            @Override
+            public void close() throws IOException {
+                if (in != null) in.close();
+            }
+        };
+        return new WebResourceResponse("application/octet-stream", null, 200, "OK", noStore(), answer);
+    }
+
+    private InputStream download(Uri ask) {
+        String current = ask.getQueryParameter("url");
+        String method = "POST".equals(ask.getQueryParameter("method")) ? "POST" : "GET";
+        String body = ask.getQueryParameter("body");
+        boolean follow = !"0".equals(ask.getQueryParameter("follow"));
+        long max;
+        try {
+            max = Long.parseLong(ask.getQueryParameter("max"));
+        } catch (NumberFormatException e) {
+            max = 8L * 1024 * 1024;
+        }
+        try {
+            JSONObject headers = new JSONObject(ask.getQueryParameter("headers") == null ? "{}" : ask.getQueryParameter("headers"));
+            for (int hop = 0; ; hop++) {
+                URL target = new URL(current);
+                if (!target.getProtocol().equals("http") && !target.getProtocol().equals("https")) {
+                    return answer(failure("Not a web address", current), null);
+                }
+                // As NewsFeed's server: links never lead into the network the phone is on.
+                for (InetAddress address : InetAddress.getAllByName(target.getHost())) {
+                    if (isPrivate(address)) return answer(failure("Address is on a private network", current), null);
+                }
+                HttpURLConnection connection = (HttpURLConnection) target.openConnection();
+                connection.setInstanceFollowRedirects(false);
+                connection.setConnectTimeout(TIMEOUT_MS);
+                connection.setReadTimeout(TIMEOUT_MS);
+                connection.setRequestMethod(method);
+                connection.setRequestProperty("User-Agent", userAgent);
+                for (Iterator<String> names = headers.keys(); names.hasNext(); ) {
+                    String name = names.next();
+                    connection.setRequestProperty(name, headers.getString(name));
+                }
+                String cookies = CookieManager.getInstance().getCookie(current);
+                if (!TextUtils.isEmpty(cookies)) connection.setRequestProperty("Cookie", cookies);
+                if (body != null) {
+                    connection.setDoOutput(true);
+                    try (OutputStream out = connection.getOutputStream()) {
+                        out.write(body.getBytes(StandardCharsets.UTF_8));
+                    }
+                }
+                int status = connection.getResponseCode();
+                keepCookies(connection, current);
+                String location = connection.getHeaderField("Location");
+                if (follow && status >= 300 && status < 400 && location != null) {
+                    connection.disconnect();
+                    if (hop >= MAX_REDIRECTS) return answer(failure("Too many redirects", current), null);
+                    current = new URL(target, location).toString();
+                    continue;
+                }
+                JSONObject passed = new JSONObject();
+                for (String name : PASSED_HEADERS) {
+                    String value = connection.getHeaderField(name);
+                    if (value != null) passed.put(name, value);
+                }
+                JSONObject meta = new JSONObject().put("status", status).put("url", current).put("headers", passed);
+                if (status < 200 || status >= 300) {
+                    connection.disconnect();
+                    return answer(meta, null);
+                }
+                return answer(meta, new Capped(connection.getInputStream(), max, connection));
+            }
+        } catch (SocketTimeoutException e) {
+            JSONObject failed = failure("Timed out", current);
+            try {
+                failed.put("timeout", true);
+            } catch (JSONException ignored) {
+                // still a failure
+            }
+            return answer(failed, null);
+        } catch (UnknownHostException e) {
+            return answer(failure("fetch failed (host not found)", current), null);
+        } catch (SSLException e) {
+            return answer(failure("fetch failed (secure connection failed)", current), null);
+        } catch (IOException | JSONException | RuntimeException e) {
+            return answer(failure("fetch failed (" + e.getClass().getSimpleName() + ")", current), null);
+        }
+    }
+
+    private static JSONObject failure(String error, String url) {
+        try {
+            return new JSONObject().put("error", error).put("url", url == null ? JSONObject.NULL : url);
+        } catch (JSONException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    /** The answer to the page: its line of JSON, then the response's bytes (if any). */
+    private static InputStream answer(JSONObject meta, InputStream body) {
+        InputStream head = new ByteArrayInputStream((meta.toString() + "\n").getBytes(StandardCharsets.UTF_8));
+        return body == null ? head : new SequenceInputStream(head, body);
+    }
+
+    /** Cookies a site sets are kept, as the phone's browser view keeps them (and sends them back). */
+    private static void keepCookies(HttpURLConnection connection, String url) {
+        for (Map.Entry<String, List<String>> header : connection.getHeaderFields().entrySet()) {
+            if (header.getKey() == null || !header.getKey().equalsIgnoreCase("Set-Cookie")) continue;
+            for (String cookie : header.getValue()) CookieManager.getInstance().setCookie(url, cookie);
+        }
+    }
+
+    /** An address on this phone or the network it's on (as lib/fetch.js's isPrivateAddress). */
+    private static boolean isPrivate(InetAddress address) {
+        if (address.isLoopbackAddress() || address.isAnyLocalAddress() || address.isLinkLocalAddress()
+                || address.isSiteLocalAddress() || address.isMulticastAddress()) return true;
+        byte[] b = address.getAddress();
+        if (address instanceof Inet4Address) return (b[0] & 0xff) == 100 && (b[1] & 0xc0) == 64; // 100.64.0.0/10
+        return address instanceof Inet6Address && (b[0] & 0xfe) == 0xfc; // fc00::/7
+    }
+
+    /** A response's body, at most max bytes of it; closing it ends the connection. */
+    private static final class Capped extends FilterInputStream {
+        private long left;
+        private final HttpURLConnection connection;
+
+        Capped(InputStream in, long max, HttpURLConnection connection) {
+            super(in);
+            this.left = max;
+            this.connection = connection;
+        }
+
+        @Override
+        public int read() throws IOException {
+            if (left <= 0) return -1;
+            int b = super.read();
+            if (b >= 0) left--;
+            return b;
+        }
+
+        @Override
+        public int read(byte[] b, int off, int len) throws IOException {
+            if (left <= 0) return -1;
+            int n = super.read(b, off, (int) Math.min(len, left));
+            if (n > 0) left -= n;
+            return n;
+        }
+
+        @Override
+        public void close() throws IOException {
+            try {
+                super.close();
+            } finally {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private static Map<String, String> noStore() {
+        Map<String, String> headers = new HashMap<>();
+        headers.put("Cache-Control", "no-store");
+        return headers;
+    }
+
+    private static WebResourceResponse text(int status, String type, String body) {
+        return new WebResourceResponse(type, "utf-8", status, status == 200 ? "OK" : status == 403 ? "Forbidden" : "Not Found",
+                noStore(), new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    private static String typeOf(String path) {
+        String name = path.toLowerCase(Locale.ROOT);
+        if (name.endsWith(".html")) return "text/html";
+        if (name.endsWith(".js")) return "text/javascript";
+        if (name.endsWith(".css")) return "text/css";
+        if (name.endsWith(".json")) return "application/json";
+        if (name.endsWith(".webmanifest")) return "application/manifest+json";
+        if (name.endsWith(".svg")) return "image/svg+xml";
+        if (name.endsWith(".png")) return "image/png";
+        if (name.endsWith(".md")) return "text/markdown";
+        return "application/octet-stream";
     }
 
     /** NewsFeed stays on its own site: other addresses (Read on…, mail) open in their own apps. */

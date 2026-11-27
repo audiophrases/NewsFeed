@@ -2,6 +2,8 @@
 # aapt2 -> javac -> d8 -> zipalign -> apksigner. Run it in PowerShell from anywhere:
 #   powershell -ExecutionPolicy Bypass -File android\build.ps1
 # then install build\newsfeed.apk on the phone (adb install -r, or copy it over and open it).
+# The app carries NewsFeed's page and the API it runs on the phone (public/, lib/, sources.json),
+# so build it again after changing those for the app to have the change.
 $ErrorActionPreference = "Stop"
 $SDK     = "C:\Users\Admin\AppData\Local\Android\Sdk"
 $BT      = "$SDK\build-tools\36.1.0"
@@ -9,6 +11,7 @@ $ANDROID = "$SDK\platforms\android-36.1\android.jar"
 $KEYTOOL = "C:\Program Files\Java\jdk-26.0.1\bin\keytool.exe"
 $P       = $PSScriptRoot
 $B       = "$P\build"
+$REPO    = Split-Path $P -Parent
 # Keep this key: updates of the app must be signed with it (a new key means reinstalling, which
 # loses what the app keeps on the phone). It is not committed to the repository.
 $KS      = "$P\newsfeed.keystore"
@@ -21,10 +24,22 @@ New-Item -ItemType Directory -Force -Path "$B\classes" | Out-Null
 # 1. one-time signing key
 if (-not (Test-Path $KS)) {
     Write-Host "==> creating signing key"
+    # keytool says what it's doing on stderr, which Windows PowerShell would take for a failure.
+    $ErrorActionPreference = "Continue"
     & $KEYTOOL -genkeypair -keystore $KS -alias newsfeed -keyalg RSA -keysize 2048 `
         -validity 10000 -storepass android -keypass android `
         -dname "CN=NewsFeed, O=Personal, C=US" 2>&1 | Out-Null
+    $ErrorActionPreference = "Stop"
+    if (-not (Test-Path $KS)) { throw "keytool failed" }
 }
+
+Write-Host "==> copying NewsFeed's page"
+# Served by the app as https://appassets.androidplatform.net/: public/ at the root, lib/ under /lib/.
+$WWW = "$B\assets\www"
+New-Item -ItemType Directory -Force -Path "$WWW\lib" | Out-Null
+Copy-Item "$REPO\public\*" $WWW -Recurse -Force
+Copy-Item "$REPO\lib\*.js" "$WWW\lib" -Force
+Copy-Item "$REPO\sources.json" $WWW -Force
 
 Write-Host "==> compiling resources"
 & "$BT\aapt2.exe" compile --dir "$P\res" -o "$B\res.zip"
@@ -59,6 +74,17 @@ try {
     $bytes = [System.IO.File]::ReadAllBytes("$B\classes.dex")
     $out.Write($bytes, 0, $bytes.Length)
     $out.Close()
+    # NewsFeed's page, as assets/www/… (put in here rather than by aapt2 -A, which on Windows names
+    # files in subfolders with backslashes that Android can't find).
+    $assets = [System.IO.Path]::GetFullPath("$B\assets")
+    foreach ($file in Get-ChildItem $assets -Recurse -File) {
+        $name = "assets/" + $file.FullName.Substring($assets.Length + 1).Replace('\', '/')
+        $entry = $zip.CreateEntry($name, [System.IO.Compression.CompressionLevel]::Optimal)
+        $out = $entry.Open()
+        $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
+        $out.Write($bytes, 0, $bytes.Length)
+        $out.Close()
+    }
 } finally { $zip.Dispose() }
 
 Write-Host "==> aligning"

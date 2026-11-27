@@ -156,34 +156,52 @@ own. To set it up:
 
 ## The Android app
 
-Google News' article links, and outlets behind bot checks (Cloudflare's "Just a moment…"), turn
-NewsFeed's server away, as they do most servers in data centres, but let a phone in. A web page
-can't read another site's page for you, though: browsers keep sites apart. The app in
-[`android/`](android/) can. It shows NewsFeed as it is, and when you open an article that the
-server can't get (any topic article from Google News, or an outlet that turns the server away),
-the phone opens it in a browser view of its own, the way Chrome would, and hands the page to
-NewsFeed, which shows it in the reader. Usually you see nothing of this but the article. When
-something is in the way (Google's cookie choice, the first time; a site's check that wants a
-tap), the page is shown: tap through it, then **Reading mode**. Your choices are kept, as in a
-browser. In the app, 🌐 and **Open the page here** open the article's own page the same way,
-for anything the reader leaves out (videos, a subscription you're signed in to).
+The app in [`android/`](android/) is NewsFeed with **no server**: it doesn't need Render. A web
+page needs the server because a page can't read other sites for you (browsers keep sites apart).
+An app can, so the app carries NewsFeed's page inside itself and fetches feeds, searches and
+articles for it, on the phone. The server's API ([`lib/api.js`](lib/api.js)) runs in the page,
+the same code as on the server ([`public/local.js`](public/local.js) sets it up). It opens at
+once, works while Render sleeps, and pages are read from your phone's connection. Sites that turn
+servers in data centres away (Google News' lookups, outlets behind Cloudflare's "Just a moment…")
+usually let a phone in.
+
+Some pages need a browser all the same: any topic article from Google News, and pages behind a
+check that runs scripts, or filled in by them. The phone opens those in a browser view of its
+own, the way Chrome would, and hands the page to NewsFeed, which shows it in the reader. Usually
+you see nothing of this but the article. When something is in the way (Google's cookie choice,
+the first time; a site's check that wants a tap), the page is shown: tap through it, then
+**Reading mode**. Your choices are kept, as in a browser. In the app, 🌐 and **Open the page
+here** open the article's own page the same way, for anything the reader leaves out (videos, a
+subscription you're signed in to).
 
 - **Build it** on the PC that builds Play the News, the same way (no Gradle):
   `powershell -ExecutionPolicy Bypass -File android\build.ps1`, then install
   `android\build\newsfeed.apk` (`adb install -r …`, or copy it to the phone and open it). The
   first build makes a signing key, `android\newsfeed.keystore`: keep a copy, as updates must be
   signed with it (it isn't committed).
-- **Where your NewsFeed runs** is `app_url` in `android/res/values/strings.xml`.
+- **Changes reach the app when you build it again.** The build puts `public/`, `lib/` and
+  `sources.json` into the app, so a push that redeploys Render doesn't change the app.
+- **Sync**: the sync service's address is `sync_url` in `android/res/values/strings.xml`. The app
+  serves NewsFeed at `https://appassets.androidplatform.net`, which Google's sign-in would need
+  in *Authorized JavaScript origins*. Google may not offer its sign-in inside an app at all, so
+  sign in from Chrome, or bring a sign-in over (below).
 - **Your data**: the app keeps its own copy of your sources, read marks and saved articles, apart
   from Chrome's. Bring them over with **Export** in Chrome and **Import** in the app (or sync).
-  Google may not offer its sign-in inside an app, so sync sign-in may only work in Chrome.
+  Earlier versions of the app showed NewsFeed from its server (`moved_from` in `strings.xml`).
+  What you had there, including a sync sign-in, comes over by itself the first time the new app
+  opens.
 - **Troubleshooting**: with USB debugging on, `chrome://inspect` on a computer shows the app's
   pages and their console.
 
 The page and the app talk through a message channel the app gives NewsFeed's own page only, not
-frames in it nor any other site. Android 6 or later.
+frames in it nor any other site. The app fetches only for NewsFeed's own page (each request
+carries a word the app gives that page each time it starts), and, like the server, never fetches
+addresses on the network the phone is on. Android 6 or later.
 
 ## API (used by the page)
+
+Served by `server.js` on the web, and run in the page itself in the Android app (both from
+[`lib/api.js`](lib/api.js)).
 
 | Endpoint | |
 | --- | --- |
@@ -196,7 +214,7 @@ frames in it nor any other site. Android 6 or later.
 | `GET /api/icon?url=` | the icon of that address's site (cached a day; 404 if it has none) |
 | `GET /api/article?url=` | an article's readable text and how complete it is (a Google News link is looked up first) |
 | `GET /api/page?url=` | an article's page without scripts or styles, for the browser's reading view, and whether it may be framed |
-| `POST /api/extract` | the readable text of a page read elsewhere (JSON `{ url, html }`, from the app), as `/api/article` gives it; nothing is fetched |
+| `POST /api/extract` | the readable text of a page read elsewhere (JSON `{ url, html }`: a page the app's browser view opened), as `/api/article` gives it; nothing is fetched |
 
 The server won't fetch addresses on your local network (so a page can't use it to reach your
 router etc.). Set `ALLOW_PRIVATE=1` if you want to read feeds hosted on your own network.
@@ -208,5 +226,6 @@ npm test
 ```
 
 Parsing (RSS, RDF, Atom, Google News, ISO-8859-1), feed discovery, article extraction and the
-server end to end against a local fixture site; the sync worker's sign-in and syncing against real
-SQLite (Node's `node:sqlite`), and merging two devices' source lists.
+server end to end against a local fixture site; the same API running in the Android app's page
+(`public/local.js`, with the test standing in for the app's fetching); the sync worker's sign-in
+and syncing against real SQLite (Node's `node:sqlite`), and merging two devices' source lists.
